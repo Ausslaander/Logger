@@ -2,6 +2,11 @@ import sqlite3
 
 from models.exp_data import ExpData
 from datetime import datetime
+from pathlib import Path
+
+import os
+import sqlite3
+import tempfile
 
 
 class DatabaseAccessor:
@@ -65,15 +70,147 @@ class DatabaseAccessor:
 
     def open_database(self, file_path: str):
         """
-            Открывает существующий SQLite-файл.
+        Открывает существующую базу данных SQLite.
 
-            file_path: путь к SQLite-файлу.
+        Новое соединение становится текущим только после проверки
+        структуры базы и наличия данных испытания.
+        При ошибке прежнее соединение сохраняется.
         """
-        if self.connection is not None:
-            self.connection.close()
+        if not Path(file_path).is_file():
+            raise FileNotFoundError(
+                f"Файл базы данных не найден: {file_path}"
+            )
 
-        self.connection = sqlite3.connect(file_path)
+        new_connection = None
+
+        try:
+            new_connection = sqlite3.connect(
+                file_path,
+                timeout=5,
+            )
+
+            self._validate_database(new_connection)
+
+        except Exception:
+            if new_connection is not None:
+                new_connection.close()
+            raise
+
+        # Новая база проверена. Теперь можно заменить соединение.
+        old_connection = self.connection
+
+        try:
+            if old_connection is not None:
+                old_connection.close()
+        except Exception:
+            new_connection.close()
+            raise
+
+        self.connection = new_connection
         self.in_memory_database = False
+
+    @staticmethod
+    def _validate_database(connection: sqlite3.Connection):
+        """
+        Проверяет целостность и совместимость базы с приложением.
+        Вызывает исключение, если база не подходит.
+        """
+        # Проверяем целостность файла SQLite.
+        result = connection.execute(
+            "PRAGMA quick_check"
+        ).fetchone()
+
+        if result is None or result[0] != "ok":
+            details = result[0] if result else "нет результата"
+            raise ValueError(
+                f"Ошибка проверки целостности SQLite: {details}"
+            )
+
+        # Проверяем наличие необходимых таблиц.
+        tables = {
+            row[0]
+            for row in connection.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table'
+                """
+            )
+        }
+
+        required_tables = {"exp", "comments"}
+        missing_tables = required_tables - tables
+
+        if missing_tables:
+            raise ValueError(
+                "В базе отсутствуют необходимые таблицы: "
+                + ", ".join(sorted(missing_tables))
+            )
+
+        # Проверяем столбцы таблицы испытания.
+        exp_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(exp)"
+            )
+        }
+
+        required_exp_columns = {
+            "id",
+            "exp_id",
+            "product_name",
+            "executor_name",
+            "exp_date",
+            "description",
+        }
+
+        missing_exp_columns = required_exp_columns - exp_columns
+
+        if missing_exp_columns:
+            raise ValueError(
+                "В таблице exp отсутствуют столбцы: "
+                + ", ".join(sorted(missing_exp_columns))
+            )
+
+        # Проверяем столбцы таблицы комментариев.
+        comments_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(comments)"
+            )
+        }
+
+        required_comments_columns = {
+            "id",
+            "created_at",
+            "last_edited",
+            "text",
+        }
+
+        missing_comments_columns = (
+                required_comments_columns - comments_columns
+        )
+
+        if missing_comments_columns:
+            raise ValueError(
+                "В таблице comments отсутствуют столбцы: "
+                + ", ".join(sorted(missing_comments_columns))
+            )
+
+        # Проверяем наличие записи текущего испытания.
+        exp_record = connection.execute(
+            """
+            SELECT exp_id, product_name, executor_name,
+                   exp_date, description
+            FROM exp
+            WHERE id = 1
+            """
+        ).fetchone()
+
+        if exp_record is None:
+            raise ValueError(
+                "В базе отсутствует запись испытания с id = 1"
+            )
 
     def get_data(self) -> ExpData:
         """
@@ -138,31 +275,87 @@ class DatabaseAccessor:
 
     def save_database(self, file_path: str):
         """
-            Сохраняет текущую базу данных в указанный файл.
-            Если БД находится в RAM, то она копируется в указанный файл.
-            Если БД уже связана с файлом (работаем с существующей БД), то изменения уже внесены на моменте
-            использования set_data, условие if не выполнится.
+        Сохраняет текущую базу данных.
 
-            file_path: путь к файлу SQLite, в который будет сохранена БД.
+        Для базы в RAM:
+        1. Создаёт временный SQLite-файл.
+        2. Копирует в него данные.
+        3. Проверяет корректность базы.
+        4. Атомарно заменяет файл назначения.
+        5. Переключается на файловое соединение.
+
+        Для уже файловой базы фиксирует изменения через commit().
         """
         if self.connection is None:
             raise RuntimeError("Нет открытой базы данных")
 
-        if self.in_memory_database:
-            destination = sqlite3.connect(file_path)
-            print("Создали destination")
+        # Для уже сохранённой базы достаточно зафиксировать изменения.
+        if not self.in_memory_database:
+            self.connection.commit()
+            return
+
+        destination_path = Path(file_path).resolve()
+        destination_dir = destination_path.parent
+
+        if not destination_dir.is_dir():
+            raise FileNotFoundError(
+                f"Каталог назначения не существует: {destination_dir}"
+            )
+
+        temporary_path = None
+        new_connection = None
+
+        try:
+            # Временный файл создаётся в том же каталоге,
+            # чтобы os.replace() мог выполнить атомарную замену.
+            file_descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{destination_path.stem}_",
+                suffix=".sqlite",
+                dir=destination_dir,
+            )
+            os.close(file_descriptor)
+            temporary_path = Path(temporary_name)
+
+            # Копируем базу во временный файл.
+            target = sqlite3.connect(str(temporary_path), timeout=5)
 
             try:
-                self.connection.backup(destination)
-                print("Успешно сделали backup")
+                self.connection.backup(target)
+                self._validate_database(target)
             finally:
-                destination.close()
+                # В Windows обязательно закрываем соединение
+                # до попытки заменить файл.
+                target.close()
 
-            self.connection.close()
-            print("Закрыли соединение")
-            self.connection = sqlite3.connect(file_path, timeout=5)
-            print("Открыли соединение с файлом")
+            # К этому моменту временная база уже закрыта.
+            os.replace(temporary_path, destination_path)
+            temporary_path = None
+
+            # Проверяем возможность открыть итоговый файл.
+            new_connection = sqlite3.connect(
+                str(destination_path),
+                timeout=5,
+            )
+            self._validate_database(new_connection)
+
+            # Переключаемся на файловую базу только после проверки.
+            old_connection = self.connection
+            old_connection.close()
+
+            self.connection = new_connection
             self.in_memory_database = False
+            new_connection = None
+
+        finally:
+            if new_connection is not None:
+                new_connection.close()
+
+            # Удаляем временный файл, если он ещё существует.
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
     def is_open(self) -> bool:
