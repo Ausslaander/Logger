@@ -416,3 +416,61 @@ class DatabaseAccessor:
                                 """, (comment_id,))
 
         self.connection.commit()
+
+    def save_database_as(self, file_path: str):
+        """Сохраняет копию базы в новый файл и переключает соединение."""
+        if self.connection is None:
+            raise RuntimeError("Нет открытой базы данных")
+
+        destination = Path(file_path).resolve()
+
+        if not destination.parent.is_dir():
+            raise FileNotFoundError(
+                f"Каталог назначения не существует: {destination.parent}"
+            )
+
+        temporary_path = None
+        new_connection = None
+
+        try:
+            fd, temp_name = tempfile.mkstemp(
+                prefix=f".{destination.stem}_",
+                suffix=".sqlite",
+                dir=destination.parent,
+            )
+            os.close(fd)
+            temporary_path = Path(temp_name)
+
+            target = sqlite3.connect(str(temporary_path), timeout=5)
+            try:
+                self.connection.backup(target)
+                self._validate_database(target)
+            finally:
+                target.close()
+
+            # Временная база уже закрыта.
+            os.replace(temporary_path, destination)
+            temporary_path = None
+
+            new_connection = sqlite3.connect(
+                str(destination),
+                timeout=5,
+            )
+            self._validate_database(new_connection)
+
+            old_connection = self.connection
+            old_connection.close()
+
+            self.connection = new_connection
+            self.in_memory_database = False
+            new_connection = None
+
+        finally:
+            if new_connection is not None:
+                new_connection.close()
+
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    pass

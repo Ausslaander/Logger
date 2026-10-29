@@ -1,6 +1,7 @@
 
 from datetime import datetime
 import traceback
+import os
 
 from PyQt6 import uic
 from PyQt6.QtCore import QDate, QThread, Qt, pyqtSlot
@@ -56,7 +57,7 @@ class MainWindow(QMainWindow):
         self.CreateExp.clicked.connect(self.create_exp)
         self.OpenExp.clicked.connect(self.open_exp)
         self.SaveExp.clicked.connect(self.save_exp)
-        self.ExcelExportButton.clicked.connect(self.excel_export)
+        self.SaveAsButton.clicked.connect(self.save_as_exp)
 
         # Подключение элементов управления общими данными.
         self.GenerateExpId.clicked.connect(self.generate_exp_id)
@@ -142,7 +143,7 @@ class MainWindow(QMainWindow):
 
         # Кнопки сохранения и экспорта.
         self.SaveExp.setEnabled(editable)
-        self.ExcelExportButton.setEnabled(editable)
+        self.SaveAsButton.setEnabled(editable)
 
         # Общие данные испытания.
         self.ExpId.setReadOnly(not editable)
@@ -223,43 +224,89 @@ class MainWindow(QMainWindow):
             )
 
     def save_exp(self):
-        """
-        Сохраняет текущее испытание.
-
-        Для нового испытания предлагает выбрать путь к файлу.
-        """
+        """Сохраняет испытание в текущий файл."""
         if not self.database_accessor.is_open():
             Logger.log(
-                "Невозможно сохранить испытание: "
-                "нет открытого испытания",
+                "Невозможно сохранить испытание: нет открытого испытания",
                 LogLevel.ERROR,
             )
+            return
+
+        # Для нового испытания сначала нужно выбрать путь и формат.
+        if self.current_file_path is None:
+            self.save_as_exp()
+            return
+
+        try:
+            exp_data = self.get_exp_data_from_ui()
+            self.database_accessor.set_data(exp_data)
+            self.database_accessor.save_database(self.current_file_path)
+
+            Logger.log(f"Испытание сохранено: {self.current_file_path}")
+
+        except Exception as error:
+            Logger.log(
+                f"Ошибка при сохранении испытания: {error}",
+                LogLevel.ERROR,
+            )
+
+    def save_as_exp(self):
+        """Сохраняет испытание в выбранном формате и месте."""
+        if not self.database_accessor.is_open():
+            Logger.log(
+                "Невозможно сохранить испытание: нет открытого испытания",
+                LogLevel.ERROR,
+            )
+            return
+
+        file_path, file_format = self.file_accessor.select_save_as_file(self)
+
+        if not file_path:
+            Logger.log("Сохранение отменено", LogLevel.WARNING)
             return
 
         try:
             exp_data = self.get_exp_data_from_ui()
 
-            # Если файл ещё не выбран, открываем диалог сохранения.
-            if self.current_file_path is None:
-                file_path = self.file_accessor.select_save_file(self)
+            if file_format == "sqlite":
+                # Обновляем данные испытания перед копированием базы.
+                self.database_accessor.set_data(exp_data)
 
-                if not file_path:
-                    Logger.log(
-                        "Сохранение отменено",
-                        LogLevel.WARNING,
-                    )
-                    return
+                same_path = (
+                        self.current_file_path is not None
+                        and os.path.normcase(os.path.abspath(file_path))
+                        == os.path.normcase(
+                    os.path.abspath(self.current_file_path)
+                )
+                )
+
+                if same_path:
+                    self.database_accessor.save_database(file_path)
+                elif self.current_file_path is None:
+                    self.database_accessor.save_database(file_path)
+                else:
+                    self.database_accessor.save_database_as(file_path)
+
+                # Меняем активный путь только после успешного сохранения.
+                self.current_file_path = file_path
+                self.CurrentExp.setText(file_path)
+
+                Logger.log(f"Испытание сохранено: {file_path}")
+
+            elif file_format == "xlsx":
+                comments = self.database_accessor.get_comments()
+
+                ExcelExporter.export(
+                    file_path=file_path,
+                    exp_data=exp_data,
+                    comments=comments,
+                )
+
+                # Excel — экспортная копия, активная база не меняется.
+                Logger.log(f"Экспорт в Excel завершён: {file_path}")
+
             else:
-                file_path = self.current_file_path
-
-            self.database_accessor.set_data(exp_data)
-            self.database_accessor.save_database(file_path)
-
-            # Обновляем путь только после успешного сохранения.
-            self.current_file_path = file_path
-            self.CurrentExp.setText(file_path)
-
-            Logger.log(f"Испытание сохранено: {file_path}")
+                raise ValueError(f"Неподдерживаемый формат: {file_format}")
 
         except Exception as error:
             Logger.log(
@@ -459,39 +506,39 @@ class MainWindow(QMainWindow):
     # Экспорт в Excel
     # ------------------------------------------------------------------
 
-    def excel_export(self):
-        """Экспортирует общие данные и комментарии в Excel."""
-        if not self.database_accessor.is_open():
-            Logger.log(
-                "Невозможно выполнить экспорт: "
-                "нет открытого испытания",
-                LogLevel.ERROR,
-            )
-            return
+    # def excel_export(self):
+    #     """Экспортирует общие данные и комментарии в Excel."""
+    #     if not self.database_accessor.is_open():
+    #         Logger.log(
+    #             "Невозможно выполнить экспорт: "
+    #             "нет открытого испытания",
+    #             LogLevel.ERROR,
+    #         )
+    #         return
+    #
+    #     file_path = self.file_accessor.select_save_excel_file(self)
+    #
+    #     if not file_path:
+    #         Logger.log("Экспорт в Excel отменён")
+    #         return
+    #
+    #     try:
+    #         exp_data = self.get_exp_data_from_ui()
+    #         comments = self.database_accessor.get_comments()
+    #
+    #         ExcelExporter.export(
+    #             file_path=file_path,
+    #             exp_data=exp_data,
+    #             comments=comments,
+    #         )
+    #
+    #         Logger.log(f"Экспорт в Excel завершён: {file_path}")
 
-        file_path = self.file_accessor.select_save_excel_file(self)
-
-        if not file_path:
-            Logger.log("Экспорт в Excel отменён")
-            return
-
-        try:
-            exp_data = self.get_exp_data_from_ui()
-            comments = self.database_accessor.get_comments()
-
-            ExcelExporter.export(
-                file_path=file_path,
-                exp_data=exp_data,
-                comments=comments,
-            )
-
-            Logger.log(f"Экспорт в Excel завершён: {file_path}")
-
-        except Exception as error:
-            Logger.log(
-                f"Ошибка при экспорте в Excel: {error}",
-                LogLevel.ERROR,
-            )
+        # except Exception as error:
+        #     Logger.log(
+        #         f"Ошибка при экспорте в Excel: {error}",
+        #         LogLevel.ERROR,
+        #     )
 
     # ------------------------------------------------------------------
     # Поиск прибора № 1
