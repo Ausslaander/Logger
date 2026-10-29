@@ -1,10 +1,9 @@
 
 from datetime import datetime
-import traceback
 import os
 
 from PyQt6 import uic
-from PyQt6.QtCore import QDate, QThread, Qt, pyqtSlot
+from PyQt6.QtCore import QDate, Qt, pyqtSlot, QThread
 from PyQt6.QtWidgets import (
     QMainWindow,
     QDialog,
@@ -13,7 +12,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
 )
 
-from config import MAIN_WINDOW_UI, DEVICE_WINDOW_UI
+from config import MAIN_WINDOW_UI
 from accessors.file_accessor import FileAccessor
 from accessors.database_accessor import DatabaseAccessor
 from services.internal_logger import InternalLogger as Logger
@@ -23,7 +22,6 @@ from models.exp_data import ExpData
 from views.CommentDialog import CommentDialog
 from views.DeleteCommentDialog import DeleteCommentDialog
 from views.DeviceWindow import DeviceWindow
-
 from hardware.device_registry import (
     get_available_devices,
     get_device_module,
@@ -38,54 +36,36 @@ class MainWindow(QMainWindow):
         """Загружает интерфейс и инициализирует компоненты приложения."""
         super().__init__()
 
-        # Загрузка интерфейса из Qt Designer.
         uic.loadUi(MAIN_WINDOW_UI, self)
 
-        # Работа с файлами и базой данных.
         self.file_accessor = FileAccessor()
         self.database_accessor = DatabaseAccessor()
         self.current_file_path = None
 
-        # Состояние поиска прибора.
         self._device_search_thread = None
         self._device_search_worker = None
         self._found_device = None
 
-        # Инициализация внутреннего логгера.
+        self._device1_window = None
+
         Logger.initialize(self.InternalLoggerWindow)
 
-        # Подключение основных кнопок.
         self.CreateExp.clicked.connect(self.create_exp)
         self.OpenExp.clicked.connect(self.open_exp)
         self.SaveExp.clicked.connect(self.save_exp)
         self.SaveAsButton.clicked.connect(self.save_as_exp)
         self.Device1WindowButton.clicked.connect(self.device1_window)
 
-        # Подключение элементов управления общими данными.
         self.GenerateExpId.clicked.connect(self.generate_exp_id)
         self.TakeCurrentDate.clicked.connect(self.take_current_date)
 
-        # Подключение кнопок комментариев.
         self.AddCommentButton.clicked.connect(self.add_comment)
         self.EditCommentButton.clicked.connect(self.edit_comment)
         self.DeleteCommentButton.clicked.connect(self.delete_comment)
 
-        # Настройка таблицы комментариев.
         self.setup_comments_table()
-
-        # Настройка поиска прибора № 1.
         self.setup_device1_search()
-
-        # При запуске испытание не открыто.
         self.set_exp_editable(False)
-
-        self._device1_window = None
-        self._device1_window_key = None
-
-
-    # ------------------------------------------------------------------
-    # Инициализация интерфейса
-    # ------------------------------------------------------------------
 
     def setup_comments_table(self):
         """Настраивает отображение таблицы комментариев."""
@@ -105,13 +85,9 @@ class MainWindow(QMainWindow):
         )
 
         header = self.CommentsTable.horizontalHeader()
-        header.setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Fixed
-        )
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header.resizeSection(0, 230)
-        header.setSectionResizeMode(
-            1, QHeaderView.ResizeMode.Stretch
-        )
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
 
         self.CommentsTable.setWordWrap(True)
         self.CommentsTable.verticalHeader().setSectionResizeMode(
@@ -133,25 +109,15 @@ class MainWindow(QMainWindow):
         self.Device1ComboBox.currentIndexChanged.connect(
             self.on_device1_selection_changed
         )
-        self.Device1SearchButton.clicked.connect(
-            self.search_device1
-        )
+        self.Device1SearchButton.clicked.connect(self.search_device1)
 
     def set_exp_editable(self, editable: bool):
-        """
-        Управляет доступностью интерфейса испытания.
-
-        editable=True означает, что испытание создано или открыто.
-        editable=False означает, что активного испытания нет.
-        """
-        # Рабочие вкладки испытания.
+        """Управляет доступностью интерфейса испытания."""
         self.TabWidget.setEnabled(editable)
 
-        # Кнопки сохранения и экспорта.
         self.SaveExp.setEnabled(editable)
         self.SaveAsButton.setEnabled(editable)
 
-        # Общие данные испытания.
         self.ExpId.setReadOnly(not editable)
         self.ProductName.setReadOnly(not editable)
         self.ExecutorName.setReadOnly(not editable)
@@ -161,15 +127,10 @@ class MainWindow(QMainWindow):
         self.TakeCurrentDate.setEnabled(editable)
         self.ExpDate.setEnabled(editable)
 
-        # Комментарии.
         self.CommentsTable.setEnabled(editable)
         self.AddCommentButton.setEnabled(editable)
         self.EditCommentButton.setEnabled(editable)
         self.DeleteCommentButton.setEnabled(editable)
-
-    # ------------------------------------------------------------------
-    # Создание, открытие и сохранение испытаний
-    # ------------------------------------------------------------------
 
     def create_exp(self):
         """Создаёт новое испытание в оперативной памяти."""
@@ -182,18 +143,15 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Новое испытание ещё не сохранено в файл.
         self.current_file_path = None
         self.CurrentExp.setText("Новый файл")
 
-        # Очищаем общие данные.
         self.ExpId.clear()
         self.ProductName.clear()
         self.ExecutorName.clear()
         self.ExpDescription.clear()
         self.ExpDate.setDate(QDate.currentDate())
 
-        # Очищаем комментарии и активируем интерфейс.
         self.set_comments_to_ui([])
         self.set_exp_editable(True)
 
@@ -238,7 +196,6 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Для нового испытания сначала нужно выбрать путь и формат.
         if self.current_file_path is None:
             self.save_as_exp()
             return
@@ -278,25 +235,21 @@ class MainWindow(QMainWindow):
             exp_data = self.get_exp_data_from_ui()
 
             if file_format == "sqlite":
-                # Обновляем данные испытания перед копированием базы.
                 self.database_accessor.set_data(exp_data)
 
                 same_path = (
-                        self.current_file_path is not None
-                        and os.path.normcase(os.path.abspath(file_path))
-                        == os.path.normcase(
-                    os.path.abspath(self.current_file_path)
-                )
+                    self.current_file_path is not None
+                    and os.path.normcase(os.path.abspath(file_path))
+                    == os.path.normcase(
+                        os.path.abspath(self.current_file_path)
+                    )
                 )
 
-                if same_path:
-                    self.database_accessor.save_database(file_path)
-                elif self.current_file_path is None:
+                if same_path or self.current_file_path is None:
                     self.database_accessor.save_database(file_path)
                 else:
                     self.database_accessor.save_database_as(file_path)
 
-                # Меняем активный путь только после успешного сохранения.
                 self.current_file_path = file_path
                 self.CurrentExp.setText(file_path)
 
@@ -311,11 +264,12 @@ class MainWindow(QMainWindow):
                     comments=comments,
                 )
 
-                # Excel — экспортная копия, активная база не меняется.
                 Logger.log(f"Экспорт в Excel завершён: {file_path}")
 
             else:
-                raise ValueError(f"Неподдерживаемый формат: {file_format}")
+                raise ValueError(
+                    f"Неподдерживаемый формат: {file_format}"
+                )
 
         except Exception as error:
             Logger.log(
@@ -340,17 +294,10 @@ class MainWindow(QMainWindow):
         self.ExecutorName.setText(exp_data.executor_name)
         self.ExpDescription.setPlainText(exp_data.description)
 
-        date = QDate.fromString(
-            exp_data.exp_date,
-            "dd.MM.yyyy",
-        )
+        date = QDate.fromString(exp_data.exp_date, "dd.MM.yyyy")
 
         if date.isValid():
             self.ExpDate.setDate(date)
-
-    # ------------------------------------------------------------------
-    # Общие данные испытания
-    # ------------------------------------------------------------------
 
     def generate_exp_id(self):
         """Генерирует номер испытания на основе текущих даты и времени."""
@@ -369,10 +316,6 @@ class MainWindow(QMainWindow):
             f"{current_date.toString('dd.MM.yyyy')}"
         )
 
-    # ------------------------------------------------------------------
-    # Комментарии
-    # ------------------------------------------------------------------
-
     def set_comments_to_ui(self, comments):
         """Заполняет таблицу комментариев данными из базы."""
         self.CommentsTable.setRowCount(0)
@@ -387,8 +330,6 @@ class MainWindow(QMainWindow):
             last_edited_item.setTextAlignment(
                 Qt.AlignmentFlag.AlignCenter
             )
-
-            # Храним ID комментария в данных ячейки.
             text_item.setData(
                 Qt.ItemDataRole.UserRole,
                 comment_id,
@@ -497,7 +438,6 @@ class MainWindow(QMainWindow):
         if text_item is None:
             return
 
-        # Для непустого комментария запрашиваем подтверждение.
         if text_item.text().strip():
             dialog = DeleteCommentDialog()
 
@@ -510,10 +450,6 @@ class MainWindow(QMainWindow):
             self.database_accessor.get_comments()
         )
         Logger.log("Комментарий удалён")
-
-    # ------------------------------------------------------------------
-    # Поиск прибора № 1
-    # ------------------------------------------------------------------
 
     @pyqtSlot(int)
     def on_device1_selection_changed(self, index: int):
@@ -536,23 +472,11 @@ class MainWindow(QMainWindow):
     @pyqtSlot()
     def search_device1(self):
         """Запускает поиск выбранного прибора в отдельном потоке."""
-        print("[MainWindow] search_device1(): начало", flush=True)
-
         if self._device_search_thread is not None:
-            print(
-                "[MainWindow] Поиск уже выполняется — выход",
-                flush=True,
-            )
             return
 
         device_id = self.Device1ComboBox.currentData()
-        print(f"[MainWindow] Выбран device_id={device_id!r}", flush=True)
-
         device_module = get_device_module(device_id)
-        print(
-            f"[MainWindow] Получен device_module={device_module!r}",
-            flush=True,
-        )
 
         if device_module is None:
             Logger.log(
@@ -561,65 +485,60 @@ class MainWindow(QMainWindow):
             )
             return
 
+        self.Device1SearchButton.setEnabled(False)
+        self.Device1WindowButton.setEnabled(False)
+        self.Device1ComboBox.setEnabled(False)
+        self.Device1SearchStatusLine.setText("Выполняется поиск...")
+        self._found_device = None
+
+        thread = None
+        worker = None
+
         try:
-            print("[MainWindow] Отключение кнопок", flush=True)
-            self.Device1SearchButton.setEnabled(False)
-            self.Device1WindowButton.setEnabled(False)
-            self.Device1ComboBox.setEnabled(False)
-            self.Device1SearchStatusLine.setText("Выполняется поиск...")
-            self._found_device = None
-
-            print("[MainWindow] Создание QThread", flush=True)
             thread = QThread(self)
-
-            print("[MainWindow] Создание DeviceSearchWorker", flush=True)
             worker = DeviceSearchWorker(device_module)
-
-            print("[MainWindow] Перенос worker в поток", flush=True)
             worker.moveToThread(thread)
 
             self._device_search_thread = thread
             self._device_search_worker = worker
 
             worker.log_message.connect(self._write_device_search_log)
-            print("[MainWindow] Подключён log_message", flush=True)
-
             worker.finished.connect(self._on_device_search_finished)
-            print("[MainWindow] Подключён finished -> обработчик", flush=True)
-
             worker.failed.connect(self._on_device_search_failed)
-            print("[MainWindow] Подключён failed -> обработчик", flush=True)
 
             worker.finished.connect(thread.quit)
-            print("[MainWindow] Подключён finished -> thread.quit", flush=True)
-
             worker.failed.connect(thread.quit)
-            print("[MainWindow] Подключён failed -> thread.quit", flush=True)
 
             thread.started.connect(worker.run)
-            print("[MainWindow] Подключён started -> worker.run", flush=True)
 
             worker.finished.connect(worker.deleteLater)
-            print("[MainWindow] Подключён finished -> worker.deleteLater", flush=True)
-
             worker.failed.connect(worker.deleteLater)
-            print("[MainWindow] Подключён failed -> worker.deleteLater", flush=True)
 
             thread.finished.connect(
                 self._on_device_search_thread_finished
             )
-            print("[MainWindow] Подключён thread.finished -> обработчик", flush=True)
-
             thread.finished.connect(thread.deleteLater)
-            print("[MainWindow] Подключён thread.finished -> thread.deleteLater", flush=True)
 
-            print("[MainWindow] Вызов thread.start()", flush=True)
             thread.start()
-            print("[MainWindow] thread.start() вызван", flush=True)
 
-        except Exception:
-            traceback.print_exc()
-            raise
+        except Exception as error:
+            Logger.log(
+                f"Не удалось запустить поиск прибора: {error}",
+                LogLevel.ERROR,
+            )
+
+            self._device_search_thread = None
+            self._device_search_worker = None
+
+            if thread is not None and thread.isRunning():
+                thread.quit()
+                thread.wait()
+
+            self.Device1ComboBox.setEnabled(True)
+            self.Device1SearchButton.setEnabled(
+                self.Device1ComboBox.currentData() is not None
+            )
+            self.Device1SearchStatusLine.setText("Ошибка запуска поиска")
 
     @pyqtSlot(str, object)
     def _write_device_search_log(self, message, level):
@@ -629,18 +548,12 @@ class MainWindow(QMainWindow):
     @pyqtSlot(list)
     def _on_device_search_finished(self, devices: list):
         """Обрабатывает результаты поиска прибора."""
-        print(
-            "[MainWindow] _on_device_search_finished(): начало",
-            flush=True,
-        )
-
         if not devices:
             self._found_device = None
             self.Device1SearchStatusLine.setText("Прибор не найден")
             self.Device1WindowButton.setEnabled(False)
             return
 
-        # Пока используем первое найденное устройство.
         self._found_device = devices[0]
         device = self._found_device
 
@@ -649,17 +562,12 @@ class MainWindow(QMainWindow):
         )
         self.Device1WindowButton.setEnabled(True)
 
-
         if len(devices) > 1:
             Logger.log(
                 f"Найдено устройств: {len(devices)}. "
                 "Выбрано первое найденное устройство.",
                 LogLevel.WARNING,
             )
-        print(
-            "[MainWindow] _on_device_search_finished(): завершение",
-            flush=True,
-        )
 
     @pyqtSlot(str)
     def _on_device_search_failed(self, error_message: str):
@@ -668,17 +576,14 @@ class MainWindow(QMainWindow):
         self.Device1SearchStatusLine.setText("Ошибка поиска")
         self.Device1WindowButton.setEnabled(False)
 
-        # Подробная ошибка уже передаётся в логгер рабочим потоком.
-        # error_message оставлен для дальнейшего расширения обработки.
+        Logger.log(
+            f"Ошибка поиска прибора: {error_message}",
+            LogLevel.ERROR,
+        )
 
     @pyqtSlot()
     def _on_device_search_thread_finished(self):
         """Освобождает ссылки на завершившийся поток поиска."""
-        print(
-            "[MainWindow] _on_device_search_thread_finished(): начало",
-            flush=True,
-        )
-
         self._device_search_thread = None
         self._device_search_worker = None
 
@@ -686,42 +591,18 @@ class MainWindow(QMainWindow):
         self.Device1SearchButton.setEnabled(
             self.Device1ComboBox.currentData() is not None
         )
-        print(
-            "[MainWindow] _on_device_search_thread_finished(): завершение",
-            flush=True,
-        )
 
     def device1_window(self):
         """Открывает окно измерений найденного прибора."""
-        print("[DeviceWindow] 1. Вход в device1_window()", flush=True)
-
         if self._found_device is None:
-            print("[DeviceWindow] Нет найденного прибора", flush=True)
             return
-
-        print(
-            f"[DeviceWindow] 2. found_device={self._found_device!r}",
-            flush=True,
-        )
 
         if self._device1_window is None:
             device_id = self.Device1ComboBox.currentData()
-            print(
-                f"[DeviceWindow] 3. device_id={device_id!r}",
-                flush=True,
-            )
-
             device_module = get_device_module(device_id)
-            print(
-                f"[DeviceWindow] 4. device_module={device_module!r}",
-                flush=True,
-            )
 
             if device_module is None:
-                print("[DeviceWindow] Модуль не найден", flush=True)
                 return
-
-            print("[DeviceWindow] 5. Перед созданием DeviceWindow", flush=True)
 
             self._device1_window = DeviceWindow(
                 device_module=device_module,
@@ -729,26 +610,14 @@ class MainWindow(QMainWindow):
                 parent=self,
             )
 
-            print("[DeviceWindow] 6. DeviceWindow создан", flush=True)
-
             self._device1_window.closed.connect(
                 self._on_device1_window_closed
             )
-            print("[DeviceWindow] 7. Сигнал closed подключён", flush=True)
 
-        print("[DeviceWindow] 8. Перед show()", flush=True)
         self._device1_window.show()
-        print("[DeviceWindow] 9. После show()", flush=True)
-
         self._device1_window.raise_()
-        print("[DeviceWindow] 10. После raise_()", flush=True)
-
         self._device1_window.activateWindow()
-        print("[DeviceWindow] 11. После activateWindow()", flush=True)
 
     def _on_device1_window_closed(self):
         """Сбрасывает ссылку на закрытое окно измерений."""
         self._device1_window = None
-
-
-

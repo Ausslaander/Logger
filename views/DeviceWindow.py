@@ -1,7 +1,9 @@
+
 import logging
 
 from PyQt6 import uic
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QDate, QThread, Qt, pyqtSlot
 from PyQt6.QtWidgets import QMainWindow
 
 from config import DEVICE_WINDOW_UI
@@ -16,20 +18,7 @@ class DeviceWindow(QMainWindow):
     closed = pyqtSignal()
 
     def __init__(self, device_module, found_device, parent=None):
-        print(
-            "[DeviceWindow] 1. Вход в __init__",
-            flush=True,
-        )
-
-        print(
-            "[DeviceWindow] 2. Перед super().__init__(parent)",
-            flush=True,
-        )
         super().__init__(parent)
-        print(
-            "[DeviceWindow] 3. После super().__init__(parent)",
-            flush=True,
-        )
 
         self.setAttribute(
             Qt.WidgetAttribute.WA_DeleteOnClose,
@@ -41,24 +30,13 @@ class DeviceWindow(QMainWindow):
 
         self._current_device_state = None
         self._manual_reconnect_active = False
+        self._is_recording = False
         self._closing = False
 
-        print(
-            f"[DeviceWindow] 4. DEVICE_WINDOW_UI={DEVICE_WINDOW_UI!r}",
-            flush=True,
-        )
-        print(
-            "[DeviceWindow] 5. Перед uic.loadUi()",
-            flush=True,
-        )
-
+        # Загружаем интерфейс до обращения к его элементам.
         uic.loadUi(DEVICE_WINDOW_UI, self)
 
-        print(
-            "[DeviceWindow] 6. После uic.loadUi()",
-            flush=True,
-        )
-
+        # Настраиваем подписи окна.
         self.DeviceNameLabel.setText(
             self.device_module.DISPLAY_NAME
         )
@@ -70,78 +48,22 @@ class DeviceWindow(QMainWindow):
             f"ID {self.found_device['slave_id']}"
         )
 
-        print(
-            "[DeviceWindow] 7. Подписи окна настроены",
-            flush=True,
+        # Подключаем кнопки записи.
+        self.StartRecordingButton.clicked.connect(
+            self._start_recording
+        )
+        self.StopRecordingButton.clicked.connect(
+            self._stop_recording
         )
 
-        print(
-            "[DeviceWindow] 8.1 StartRecordingButton:",
-            repr(self.StartRecordingButton),
-            flush=True,
-        )
         self.StartRecordingButton.setEnabled(False)
-        print("[DeviceWindow] 8.2 StartRecordingButton отключена", flush=True)
-
-        print(
-            "[DeviceWindow] 8.3 StopRecordingButton:",
-            repr(self.StopRecordingButton),
-            flush=True,
-        )
         self.StopRecordingButton.setEnabled(False)
-        print("[DeviceWindow] 8.4 StopRecordingButton отключена", flush=True)
 
-        print(
-            "[DeviceWindow] 8.5 Получение StartReconnectingButton",
-            flush=True,
-        )
-        start_button = self.StartReconnectingButton
-        print(
-            "[DeviceWindow] 8.6 StartReconnectingButton получена:",
-            repr(start_button),
-            flush=True,
-        )
-        print(
-            "[DeviceWindow] 8.7 Тип StartReconnectingButton:",
-            type(start_button),
-            flush=True,
-        )
-
-        print(
-            "[DeviceWindow] 8.8 Получение StopReconnectingButton",
-            flush=True,
-        )
-        stop_button = self.StopReconnectingButton
-        print(
-            "[DeviceWindow] 8.9 StopReconnectingButton получена:",
-            repr(stop_button),
-            flush=True,
-        )
-        print(
-            "[DeviceWindow] 8.10 Тип StopReconnectingButton:",
-            type(stop_button),
-            flush=True,
-        )
-        print(
-            "[DeviceWindow] 8.11 Перед отключением StopReconnectingButton",
-            flush=True,
-        )
+        # Начальное состояние кнопок переподключения.
+        self.StartReconnectingButton.setEnabled(False)
         self.StopReconnectingButton.setEnabled(False)
-        print(
-            "[DeviceWindow] 8.12 После отключения StopReconnectingButton",
-            flush=True,
-        )
 
-        print(
-            "[DeviceWindow] 8.13 Все кнопки настроены",
-            flush=True,
-        )
-
-        print(
-            "[DeviceWindow] 9. Перед созданием DeviceMonitor",
-            flush=True,
-        )
-
+        # Создаём монитор прибора.
         self.device_monitor = DeviceMonitor(
             device_module=self.device_module,
             found_device=self.found_device,
@@ -150,11 +72,7 @@ class DeviceWindow(QMainWindow):
             parent=self,
         )
 
-        print(
-            "[DeviceWindow] 10. DeviceMonitor создан",
-            flush=True,
-        )
-
+        # Подключаем сигналы монитора.
         self.device_monitor.state_changed.connect(
             self._on_device_state_changed
         )
@@ -165,11 +83,7 @@ class DeviceWindow(QMainWindow):
             self._on_manual_reconnect_changed
         )
 
-        print(
-            "[DeviceWindow] 11. Сигналы DeviceMonitor подключены",
-            flush=True,
-        )
-
+        # Подключаем кнопки переподключения.
         self.StartReconnectingButton.clicked.connect(
             self.device_monitor.start_reconnecting
         )
@@ -177,29 +91,10 @@ class DeviceWindow(QMainWindow):
             self.device_monitor.stop_reconnecting
         )
 
-        print(
-            "[DeviceWindow] 12. Обработчики кнопок подключены",
-            flush=True,
-        )
-
-        print(
-            "[DeviceWindow] 13. Перед start_monitoring()",
-            flush=True,
-        )
-
+        # Запускаем мониторинг.
         self.device_monitor.start_monitoring()
 
-        print(
-            "[DeviceWindow] 14. После start_monitoring()",
-            flush=True,
-        )
-
     def _on_device_state_changed(self, state: DeviceState):
-        print(
-            f"[DeviceWindow] Изменение состояния: {state!r}",
-            flush=True,
-        )
-
         self._current_device_state = state
 
         status_text = {
@@ -212,17 +107,17 @@ class DeviceWindow(QMainWindow):
             DeviceState.CONNECTION_ERROR: "Ошибка подключения",
         }
 
-        self.DeviceStatusLabel.setText(
-            status_text.get(state, "Неизвестное состояние")
-        )
+        if self._is_recording:
+            self.DeviceStatusLabel.setText("Запись данных")
+        else:
+            self.DeviceStatusLabel.setText(
+                status_text.get(state, "Неизвестное состояние")
+            )
+
         self._update_reconnect_buttons()
+        self._update_recording_buttons()
 
     def _on_manual_reconnect_changed(self, active: bool):
-        print(
-            f"[DeviceWindow] Ручное переподключение: {active}",
-            flush=True,
-        )
-
         self._manual_reconnect_active = active
         self._update_reconnect_buttons()
 
@@ -237,59 +132,111 @@ class DeviceWindow(QMainWindow):
         self.StartReconnectingButton.setEnabled(
             state == DeviceState.OFFLINE
             and not self._manual_reconnect_active
+            and not self._is_recording
         )
 
         self.StopReconnectingButton.setEnabled(
             state == DeviceState.RECONNECTING
             and self._manual_reconnect_active
+            and not self._is_recording
         )
 
     def _on_device_error(self, message: str):
-        print(
-            f"[DeviceWindow] Ошибка прибора: {message}",
-            flush=True,
-        )
-
         logger.warning(
             "Ошибка взаимодействия с прибором %s: %s",
             self.device_module.DEVICE_ID,
             message,
         )
 
-    def closeEvent(self, event):
-        print(
-            "[DeviceWindow] Вызван closeEvent()",
-            flush=True,
+    def _start_recording(self) -> None:
+        if self._closing or self._is_recording:
+            return
+
+        if self._current_device_state != DeviceState.ONLINE:
+            return
+
+        # Приостанавливаем опрос связи.
+        self.device_monitor.pause_polling()
+
+        self._is_recording = True
+
+        self._update_recording_buttons()
+        self._update_reconnect_buttons()
+
+        self.DeviceStatusLabel.setText("Запись данных")
+
+    def _stop_recording(self) -> None:
+        if not self._is_recording:
+            return
+
+        self._is_recording = False
+
+        # Возобновляем опрос связи.
+        self.device_monitor.resume_polling()
+
+        self._update_recording_buttons()
+        self._update_reconnect_buttons()
+
+        # Показываем актуальное состояние прибора.
+        status_text = {
+            DeviceState.FOUND: "Прибор найден",
+            DeviceState.CONNECTING: "Подключение...",
+            DeviceState.ONLINE: "На связи",
+            DeviceState.CHECKING: "Проверка связи...",
+            DeviceState.OFFLINE: "Нет связи",
+            DeviceState.RECONNECTING: "Восстановление связи...",
+            DeviceState.CONNECTION_ERROR: "Ошибка подключения",
+        }
+
+        self.DeviceStatusLabel.setText(
+            status_text.get(
+                self._current_device_state,
+                "Неизвестное состояние",
+            )
         )
 
+    def _update_recording_buttons(self) -> None:
+        online = (
+            self._current_device_state == DeviceState.ONLINE
+        )
+
+        self.StartRecordingButton.setEnabled(
+            online
+            and not self._is_recording
+            and not self._closing
+        )
+
+        self.StopRecordingButton.setEnabled(
+            self._is_recording
+            and not self._closing
+        )
+
+    def closeEvent(self, event):
         if self._closing:
             event.accept()
             return
 
         self._closing = True
+
+        self.StartRecordingButton.setEnabled(False)
+        self.StopRecordingButton.setEnabled(False)
         self.StartReconnectingButton.setEnabled(False)
         self.StopReconnectingButton.setEnabled(False)
 
         try:
-            print(
-                "[DeviceWindow] Перед stop_monitoring()",
-                flush=True,
-            )
+            # Снимаем режим записи перед остановкой монитора.
+            if self._is_recording:
+                self._is_recording = False
+                self.device_monitor.resume_polling()
+
             self.device_monitor.stop_monitoring()
-            print(
-                "[DeviceWindow] После stop_monitoring()",
-                flush=True,
-            )
+
         except Exception:
             logger.exception(
                 "Ошибка при остановке мониторинга прибора %s",
                 self.device_module.DEVICE_ID,
             )
+
         finally:
             self.closed.emit()
             event.accept()
-
-            print(
-                "[DeviceWindow] Окно закрывается",
-                flush=True,
-            )

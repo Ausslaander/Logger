@@ -1,3 +1,4 @@
+
 from threading import Event, get_ident
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -24,7 +25,9 @@ class DeviceMonitor(QThread):
         super().__init__(parent)
 
         if interval <= 0:
-            raise ValueError("Интервал проверки должен быть положительным.")
+            raise ValueError(
+                "Интервал проверки должен быть положительным."
+            )
 
         if max_failures < 1:
             raise ValueError(
@@ -39,6 +42,7 @@ class DeviceMonitor(QThread):
         self._stop_event = Event()
         self._start_reconnect_event = Event()
         self._stop_reconnect_event = Event()
+        self._polling_paused = Event()
 
         self._connection = None
         self._current_state = None
@@ -73,14 +77,20 @@ class DeviceMonitor(QThread):
 
     def _connect_and_check(self) -> bool:
         """Одна попытка: открыть порт и получить корректный ответ."""
-        print("[DeviceMonitor] _connect_and_check: начало", flush=True)
+        print(
+            "[DeviceMonitor] _connect_and_check: начало",
+            flush=True,
+        )
 
         try:
             print("[DeviceMonitor] Вызов connect()", flush=True)
             self._connection.connect()
             print("[DeviceMonitor] connect() завершён", flush=True)
 
-            print("[DeviceMonitor] Вызов check_connection()", flush=True)
+            print(
+                "[DeviceMonitor] Вызов check_connection()",
+                flush=True,
+            )
             result = self._connection.check_connection()
 
             print(
@@ -99,7 +109,10 @@ class DeviceMonitor(QThread):
             return False
 
         finally:
-            print("[DeviceMonitor] _connect_and_check: выход", flush=True)
+            print(
+                "[DeviceMonitor] _connect_and_check: выход",
+                flush=True,
+            )
 
     def _wait(self) -> None:
         """Ожидание следующего шага с возможностью остановки."""
@@ -108,7 +121,10 @@ class DeviceMonitor(QThread):
             flush=True,
         )
         self._stop_event.wait(self.interval)
-        print("[DeviceMonitor] Ожидание завершено", flush=True)
+        print(
+            "[DeviceMonitor] Ожидание завершено",
+            flush=True,
+        )
 
     def run(self) -> None:
         print(
@@ -121,14 +137,20 @@ class DeviceMonitor(QThread):
         manual_mode = False
 
         try:
-            print("[DeviceMonitor] Создание DeviceConnection", flush=True)
+            print(
+                "[DeviceMonitor] Создание DeviceConnection",
+                flush=True,
+            )
 
             self._connection = DeviceConnection(
                 self.device_module,
                 self.found_device,
             )
 
-            print("[DeviceMonitor] DeviceConnection создан", flush=True)
+            print(
+                "[DeviceMonitor] DeviceConnection создан",
+                flush=True,
+            )
 
             # Первоначальная попытка подключения.
             print(
@@ -140,7 +162,10 @@ class DeviceMonitor(QThread):
             if self._connect_and_check():
                 ever_online = True
                 self._set_state(DeviceState.ONLINE)
-                print("[DeviceMonitor] Прибор доступен", flush=True)
+                print(
+                    "[DeviceMonitor] Прибор доступен",
+                    flush=True,
+                )
             else:
                 print(
                     "[DeviceMonitor] Первоначальное подключение не удалось",
@@ -157,9 +182,17 @@ class DeviceMonitor(QThread):
                 print(
                     f"[DeviceMonitor] Цикл #{iteration}, "
                     f"state={self._current_state}, "
-                    f"manual_mode={manual_mode}, failures={failures}",
+                    f"manual_mode={manual_mode}, "
+                    f"failures={failures}, "
+                    f"polling_paused={self._polling_paused.is_set()}",
                     flush=True,
                 )
+
+                # Во время записи не обрабатываем команды
+                # переподключения и не выполняем проверки связи.
+                if self._polling_paused.is_set():
+                    self._stop_event.wait(0.1)
+                    continue
 
                 # Команда пользователя на запуск переподключения.
                 if self._start_reconnect_event.is_set():
@@ -208,7 +241,7 @@ class DeviceMonitor(QThread):
                         self._connection.disconnect()
                         self._set_state(DeviceState.OFFLINE)
 
-                # В режиме переподключения повторяем попытки.
+                # Режим ручного переподключения.
                 if manual_mode:
                     print(
                         "[DeviceMonitor] Режим ручного переподключения",
@@ -238,7 +271,7 @@ class DeviceMonitor(QThread):
                     self._wait()
                     continue
 
-                # Проверяем работающий прибор.
+                # Проверка работающего прибора.
                 if self._current_state == DeviceState.ONLINE:
                     try:
                         print(
@@ -246,7 +279,9 @@ class DeviceMonitor(QThread):
                             flush=True,
                         )
 
-                        is_alive = self._connection.check_connection()
+                        is_alive = (
+                            self._connection.check_connection()
+                        )
 
                         print(
                             f"[DeviceMonitor] Результат проверки: "
@@ -285,7 +320,7 @@ class DeviceMonitor(QThread):
 
                         self._set_state(DeviceState.OFFLINE)
 
-                        # Ровно одна автоматическая попытка восстановления.
+                        # Одна автоматическая попытка восстановления.
                         self._set_state(DeviceState.RECONNECTING)
 
                         print(
@@ -389,10 +424,14 @@ class DeviceMonitor(QThread):
             self._stop_event.clear()
             self._start_reconnect_event.clear()
             self._stop_reconnect_event.clear()
+            self._polling_paused.clear()
             self._current_state = None
             self._manual_reconnect_active = False
 
-            print("[DeviceMonitor] Вызов start()", flush=True)
+            print(
+                "[DeviceMonitor] Вызов start()",
+                flush=True,
+            )
             self.start()
 
     def start_reconnecting(self) -> None:
@@ -403,7 +442,7 @@ class DeviceMonitor(QThread):
             flush=True,
         )
 
-        if self.isRunning():
+        if self.isRunning() and not self._polling_paused.is_set():
             self._start_reconnect_event.set()
 
     def stop_reconnecting(self) -> None:
@@ -412,7 +451,9 @@ class DeviceMonitor(QThread):
             "[DeviceMonitor] stop_reconnecting(): вызван",
             flush=True,
         )
-        self._stop_reconnect_event.set()
+
+        if self.isRunning() and not self._polling_paused.is_set():
+            self._stop_reconnect_event.set()
 
     def stop_monitoring(self) -> None:
         """Останавливает монитор и ждёт освобождения ресурсов."""
@@ -426,6 +467,28 @@ class DeviceMonitor(QThread):
         self._stop_reconnect_event.set()
 
         if self.isRunning():
-            print("[DeviceMonitor] Ожидание завершения потока", flush=True)
+            print(
+                "[DeviceMonitor] Ожидание завершения потока",
+                flush=True,
+            )
             self.wait()
-            print("[DeviceMonitor] Поток завершён", flush=True)
+            print(
+                "[DeviceMonitor] Поток завершён",
+                flush=True,
+            )
+
+    def pause_polling(self) -> None:
+        """Приостанавливает проверки связи."""
+        print(
+            "[DeviceMonitor] Опрос приостановлен",
+            flush=True,
+        )
+        self._polling_paused.set()
+
+    def resume_polling(self) -> None:
+        """Возобновляет проверки связи."""
+        print(
+            "[DeviceMonitor] Опрос возобновлён",
+            flush=True,
+        )
+        self._polling_paused.clear()
