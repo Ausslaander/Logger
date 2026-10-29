@@ -101,6 +101,7 @@ def scan_device(device_module, log=None) -> list[dict]:
                         f"порт={port_name}, Modbus ID={slave_id}.",
                         LogLevel.INFO,
                     )
+                    return found_devices
 
         except (serial.SerialException, OSError) as error:
             log(

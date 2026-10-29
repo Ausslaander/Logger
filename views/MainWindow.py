@@ -80,6 +80,7 @@ class MainWindow(QMainWindow):
         self.set_exp_editable(False)
 
         self._device1_window = None
+        self._device1_window_key = None
 
     # ------------------------------------------------------------------
     # Инициализация интерфейса
@@ -631,15 +632,37 @@ class MainWindow(QMainWindow):
             self.Device1ComboBox.currentData() is not None
         )
 
-
     def device1_window(self):
-        """Открывает окно измерений прибора № 1."""
+        """Открывает окно измерений найденного прибора."""
+
+
+        if self._found_device is None:
+            return
+
+        device_id = self.Device1ComboBox.currentData()
+
+        device_module = get_device_module(device_id)
+
+        if device_module is None:
+            Logger.log(
+                "Не удалось определить модель найденного прибора.",
+                LogLevel.ERROR,
+            )
+            return
+
 
         if self._device1_window is None:
-            self._device1_window = DeviceWindow(self)
+            self._device1_window = DeviceWindow(
+                device_module=device_module,
+                found_device=self._found_device,
+                parent=self,
+            )
+
 
         self._device1_window.show()
+
         self._device1_window.raise_()
         self._device1_window.activateWindow()
+
 
 
