@@ -14,12 +14,12 @@
    <string>Прибор 1</string>
   </property>
   <widget class="QWidget" name="centralwidget">
-   <widget class="QLabel" name="label">
+   <widget class="QLabel" name="DeviceNameLabel">
     <property name="geometry">
      <rect>
       <x>10</x>
       <y>10</y>
-      <width>201</width>
+      <width>731</width>
       <height>21</height>
      </rect>
     </property>
@@ -32,12 +32,12 @@
      <string>&lt;Название прибора&gt;</string>
     </property>
    </widget>
-   <widget class="QLabel" name="label_2">
+   <widget class="QLabel" name="DeviceStatusLabel">
     <property name="geometry">
      <rect>
       <x>10</x>
       <y>40</y>
-      <width>201</width>
+      <width>711</width>
       <height>21</height>
      </rect>
     </property>
@@ -68,7 +68,7 @@
      <string>Начать запись</string>
     </property>
    </widget>
-   <widget class="QPushButton" name="GenerateExpId_2">
+   <widget class="QPushButton" name="StopRecordingButton">
     <property name="geometry">
      <rect>
       <x>220</x>

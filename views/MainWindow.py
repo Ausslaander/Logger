@@ -22,6 +22,7 @@ from services.excel_exporter import ExcelExporter
 from models.exp_data import ExpData
 from views.CommentDialog import CommentDialog
 from views.DeleteCommentDialog import DeleteCommentDialog
+from views.DeviceWindow import DeviceWindow
 
 from hardware.device_registry import (
     get_available_devices,
@@ -77,6 +78,8 @@ class MainWindow(QMainWindow):
 
         # При запуске испытание не открыто.
         self.set_exp_editable(False)
+
+        self._device1_window = None
 
     # ------------------------------------------------------------------
     # Инициализация интерфейса
@@ -630,5 +633,13 @@ class MainWindow(QMainWindow):
 
 
     def device1_window(self):
-        pass
+        """Открывает окно измерений прибора № 1."""
+
+        if self._device1_window is None:
+            self._device1_window = DeviceWindow(self)
+
+        self._device1_window.show()
+        self._device1_window.raise_()
+        self._device1_window.activateWindow()
+
 
