@@ -18,8 +18,8 @@ class DeviceSearchWorker(QObject):
 
     @pyqtSlot()
     def run(self):
-
         try:
+            print("10. DeviceSearchWorker.run() начат", flush=True)
 
             devices = scan_device(
                 self.device_module,
@@ -29,10 +29,13 @@ class DeviceSearchWorker(QObject):
             )
 
             print(
-                f"12. scan_device() завершён, найдено: {len(devices)}",
+                f"11. Поиск завершён, найдено: {len(devices)}",
                 flush=True,
             )
+
+            print("12. Перед finished.emit()", flush=True)
             self.finished.emit(devices)
+            print("13. После finished.emit()", flush=True)
 
         except Exception as error:
             traceback.print_exc()
@@ -42,3 +45,7 @@ class DeviceSearchWorker(QObject):
                 LogLevel.ERROR,
             )
             self.failed.emit(str(error))
+
+        finally:
+            print("14. Выход из DeviceSearchWorker.run()", flush=True)
+

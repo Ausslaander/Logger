@@ -82,6 +82,7 @@ class MainWindow(QMainWindow):
         self._device1_window = None
         self._device1_window_key = None
 
+
     # ------------------------------------------------------------------
     # Инициализация интерфейса
     # ------------------------------------------------------------------
@@ -533,13 +534,26 @@ class MainWindow(QMainWindow):
             self.Device1SearchStatusLine.setText("Готов к поиску")
 
     @pyqtSlot()
+    @pyqtSlot()
     def search_device1(self):
         """Запускает поиск выбранного прибора в отдельном потоке."""
+        print("[MainWindow] search_device1(): начало", flush=True)
+
         if self._device_search_thread is not None:
+            print(
+                "[MainWindow] Поиск уже выполняется — выход",
+                flush=True,
+            )
             return
 
         device_id = self.Device1ComboBox.currentData()
+        print(f"[MainWindow] Выбран device_id={device_id!r}", flush=True)
+
         device_module = get_device_module(device_id)
+        print(
+            f"[MainWindow] Получен device_module={device_module!r}",
+            flush=True,
+        )
 
         if device_module is None:
             Logger.log(
@@ -548,38 +562,65 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self.Device1SearchButton.setEnabled(False)
-        self.Device1WindowButton.setEnabled(False)
-        self.Device1ComboBox.setEnabled(False)
-        self.Device1SearchStatusLine.setText("Выполняется поиск...")
-        self._found_device = None
+        try:
+            print("[MainWindow] Отключение кнопок", flush=True)
+            self.Device1SearchButton.setEnabled(False)
+            self.Device1WindowButton.setEnabled(False)
+            self.Device1ComboBox.setEnabled(False)
+            self.Device1SearchStatusLine.setText("Выполняется поиск...")
+            self._found_device = None
 
-        thread = QThread(self)
-        worker = DeviceSearchWorker(device_module)
-        worker.moveToThread(thread)
+            print("[MainWindow] Создание QThread", flush=True)
+            thread = QThread(self)
 
-        self._device_search_thread = thread
-        self._device_search_worker = worker
+            print("[MainWindow] Создание DeviceSearchWorker", flush=True)
+            worker = DeviceSearchWorker(device_module)
 
-        # Результаты рабочего потока обрабатываются в главном потоке.
-        worker.log_message.connect(self._write_device_search_log)
-        worker.finished.connect(self._on_device_search_finished)
-        worker.failed.connect(self._on_device_search_failed)
+            print("[MainWindow] Перенос worker в поток", flush=True)
+            worker.moveToThread(thread)
 
-        worker.finished.connect(thread.quit)
-        worker.failed.connect(thread.quit)
+            self._device_search_thread = thread
+            self._device_search_worker = worker
 
-        thread.started.connect(worker.run)
+            worker.log_message.connect(self._write_device_search_log)
+            print("[MainWindow] Подключён log_message", flush=True)
 
-        worker.finished.connect(worker.deleteLater)
-        worker.failed.connect(worker.deleteLater)
+            worker.finished.connect(self._on_device_search_finished)
+            print("[MainWindow] Подключён finished -> обработчик", flush=True)
 
-        thread.finished.connect(
-            self._on_device_search_thread_finished
-        )
-        thread.finished.connect(thread.deleteLater)
+            worker.failed.connect(self._on_device_search_failed)
+            print("[MainWindow] Подключён failed -> обработчик", flush=True)
 
-        thread.start()
+            worker.finished.connect(thread.quit)
+            print("[MainWindow] Подключён finished -> thread.quit", flush=True)
+
+            worker.failed.connect(thread.quit)
+            print("[MainWindow] Подключён failed -> thread.quit", flush=True)
+
+            thread.started.connect(worker.run)
+            print("[MainWindow] Подключён started -> worker.run", flush=True)
+
+            worker.finished.connect(worker.deleteLater)
+            print("[MainWindow] Подключён finished -> worker.deleteLater", flush=True)
+
+            worker.failed.connect(worker.deleteLater)
+            print("[MainWindow] Подключён failed -> worker.deleteLater", flush=True)
+
+            thread.finished.connect(
+                self._on_device_search_thread_finished
+            )
+            print("[MainWindow] Подключён thread.finished -> обработчик", flush=True)
+
+            thread.finished.connect(thread.deleteLater)
+            print("[MainWindow] Подключён thread.finished -> thread.deleteLater", flush=True)
+
+            print("[MainWindow] Вызов thread.start()", flush=True)
+            thread.start()
+            print("[MainWindow] thread.start() вызван", flush=True)
+
+        except Exception:
+            traceback.print_exc()
+            raise
 
     @pyqtSlot(str, object)
     def _write_device_search_log(self, message, level):
@@ -589,6 +630,11 @@ class MainWindow(QMainWindow):
     @pyqtSlot(list)
     def _on_device_search_finished(self, devices: list):
         """Обрабатывает результаты поиска прибора."""
+        print(
+            "[MainWindow] _on_device_search_finished(): начало",
+            flush=True,
+        )
+
         if not devices:
             self._found_device = None
             self.Device1SearchStatusLine.setText("Прибор не найден")
@@ -604,12 +650,17 @@ class MainWindow(QMainWindow):
         )
         self.Device1WindowButton.setEnabled(True)
 
+
         if len(devices) > 1:
             Logger.log(
                 f"Найдено устройств: {len(devices)}. "
                 "Выбрано первое найденное устройство.",
                 LogLevel.WARNING,
             )
+        print(
+            "[MainWindow] _on_device_search_finished(): завершение",
+            flush=True,
+        )
 
     @pyqtSlot(str)
     def _on_device_search_failed(self, error_message: str):
@@ -624,6 +675,11 @@ class MainWindow(QMainWindow):
     @pyqtSlot()
     def _on_device_search_thread_finished(self):
         """Освобождает ссылки на завершившийся поток поиска."""
+        print(
+            "[MainWindow] _on_device_search_thread_finished(): начало",
+            flush=True,
+        )
+
         self._device_search_thread = None
         self._device_search_worker = None
 
@@ -631,38 +687,40 @@ class MainWindow(QMainWindow):
         self.Device1SearchButton.setEnabled(
             self.Device1ComboBox.currentData() is not None
         )
+        print(
+            "[MainWindow] _on_device_search_thread_finished(): завершение",
+            flush=True,
+        )
 
     def device1_window(self):
         """Открывает окно измерений найденного прибора."""
-
-
         if self._found_device is None:
             return
 
-        device_id = self.Device1ComboBox.currentData()
-
-        device_module = get_device_module(device_id)
-
-        if device_module is None:
-            Logger.log(
-                "Не удалось определить модель найденного прибора.",
-                LogLevel.ERROR,
-            )
-            return
-
-
         if self._device1_window is None:
+            device_id = self.Device1ComboBox.currentData()
+            device_module = get_device_module(device_id)
+
+            if device_module is None:
+                return
+
             self._device1_window = DeviceWindow(
                 device_module=device_module,
                 found_device=self._found_device,
                 parent=self,
             )
 
+            self._device1_window.closed.connect(
+                self._on_device1_window_closed
+            )
 
         self._device1_window.show()
-
         self._device1_window.raise_()
         self._device1_window.activateWindow()
+
+    def _on_device1_window_closed(self):
+        """Сбрасывает ссылку на закрытое окно измерений."""
+        self._device1_window = None
 
 
 
