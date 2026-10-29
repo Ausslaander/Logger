@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
 )
 
-from config import MAIN_WINDOW_UI
+from config import MAIN_WINDOW_UI, DEVICE_WINDOW_UI
 from accessors.file_accessor import FileAccessor
 from accessors.database_accessor import DatabaseAccessor
 from services.internal_logger import InternalLogger as Logger
@@ -58,6 +58,7 @@ class MainWindow(QMainWindow):
         self.OpenExp.clicked.connect(self.open_exp)
         self.SaveExp.clicked.connect(self.save_exp)
         self.SaveAsButton.clicked.connect(self.save_as_exp)
+        self.Device1WindowButton.clicked.connect(self.device1_window)
 
         # Подключение элементов управления общими данными.
         self.GenerateExpId.clicked.connect(self.generate_exp_id)
@@ -626,3 +627,8 @@ class MainWindow(QMainWindow):
         self.Device1SearchButton.setEnabled(
             self.Device1ComboBox.currentData() is not None
         )
+
+
+    def device1_window(self):
+        pass
+
