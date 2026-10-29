@@ -4,6 +4,9 @@ from PyQt6.QtWidgets import QApplication
 
 from views.MainWindow import MainWindow
 
+import faulthandler
+
+faulthandler.enable(all_threads=True)
 
 def main():
     """
@@ -25,7 +28,16 @@ def main():
 
     # Запуск основного цикла обработки событий Qt.
     # Цикл продолжает работу, пока приложение не будет закрыто.
-    sys.exit(app.exec())
+    print("[main] Перед app.exec()", flush=True)
+
+    exit_code = app.exec()
+
+    print(
+        f"[main] app.exec() завершился, exit_code={exit_code}",
+        flush=True,
+    )
+
+    sys.exit(exit_code)
 
 
 # Запуск приложения только в случае непосредственного выполнения main.py.

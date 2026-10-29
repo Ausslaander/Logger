@@ -534,7 +534,6 @@ class MainWindow(QMainWindow):
             self.Device1SearchStatusLine.setText("Готов к поиску")
 
     @pyqtSlot()
-    @pyqtSlot()
     def search_device1(self):
         """Запускает поиск выбранного прибора в отдельном потоке."""
         print("[MainWindow] search_device1(): начало", flush=True)
@@ -694,15 +693,35 @@ class MainWindow(QMainWindow):
 
     def device1_window(self):
         """Открывает окно измерений найденного прибора."""
+        print("[DeviceWindow] 1. Вход в device1_window()", flush=True)
+
         if self._found_device is None:
+            print("[DeviceWindow] Нет найденного прибора", flush=True)
             return
+
+        print(
+            f"[DeviceWindow] 2. found_device={self._found_device!r}",
+            flush=True,
+        )
 
         if self._device1_window is None:
             device_id = self.Device1ComboBox.currentData()
+            print(
+                f"[DeviceWindow] 3. device_id={device_id!r}",
+                flush=True,
+            )
+
             device_module = get_device_module(device_id)
+            print(
+                f"[DeviceWindow] 4. device_module={device_module!r}",
+                flush=True,
+            )
 
             if device_module is None:
+                print("[DeviceWindow] Модуль не найден", flush=True)
                 return
+
+            print("[DeviceWindow] 5. Перед созданием DeviceWindow", flush=True)
 
             self._device1_window = DeviceWindow(
                 device_module=device_module,
@@ -710,13 +729,22 @@ class MainWindow(QMainWindow):
                 parent=self,
             )
 
+            print("[DeviceWindow] 6. DeviceWindow создан", flush=True)
+
             self._device1_window.closed.connect(
                 self._on_device1_window_closed
             )
+            print("[DeviceWindow] 7. Сигнал closed подключён", flush=True)
 
+        print("[DeviceWindow] 8. Перед show()", flush=True)
         self._device1_window.show()
+        print("[DeviceWindow] 9. После show()", flush=True)
+
         self._device1_window.raise_()
+        print("[DeviceWindow] 10. После raise_()", flush=True)
+
         self._device1_window.activateWindow()
+        print("[DeviceWindow] 11. После activateWindow()", flush=True)
 
     def _on_device1_window_closed(self):
         """Сбрасывает ссылку на закрытое окно измерений."""
