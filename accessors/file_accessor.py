@@ -40,36 +40,24 @@ class FileAccessor:
 
         return file_path
 
-    # def select_save_excel_file(self, parent: QWidget) -> str:
-    #     file_path, _ = QFileDialog.getSaveFileName(
-    #         parent,
-    #         "Экспорт в Excel",
-    #         "",
-    #         "Excel Workbook (*.xlsx)",
-    #     )
-    #
-    #     if file_path and not file_path.lower().endswith(".xlsx"):
-    #         file_path += ".xlsx"
-    #
-    #     return file_path
+    def select_save_as_file(
+            self,
+            parent: QWidget,
+            exp_id: str = "",
+    ) -> tuple[str, str]:
+        """Выбирает путь и формат сохранения."""
 
-    def select_save_as_file(self, parent: QWidget) -> tuple[str, str]:
-        """
-        Выбирает путь и формат сохранения.
-
-        Возвращает:
-            (file_path, format_name), где format_name — 'sqlite' или 'xlsx'.
-            При отмене возвращает ('', '').
-        """
         filters = {
             "SQLite database (*.sqlite)": "sqlite",
             "Excel Workbook (*.xlsx)": "xlsx",
         }
 
+        default_name = exp_id.strip() or "Новое испытание"
+
         file_path, selected_filter = QFileDialog.getSaveFileName(
             parent,
             "Сохранить как",
-            "",
+            default_name,
             ";;".join(filters.keys()),
             "SQLite database (*.sqlite)",
         )
@@ -77,10 +65,10 @@ class FileAccessor:
         if not file_path or selected_filter not in filters:
             return "", ""
 
-        format_name = filters[selected_filter]
-        extension = ".sqlite" if format_name == "sqlite" else ".xlsx"
+        file_format = filters[selected_filter]
+        extension = ".sqlite" if file_format == "sqlite" else ".xlsx"
 
         if not file_path.lower().endswith(extension):
             file_path += extension
 
-        return file_path, format_name
+        return file_path, file_format

@@ -259,7 +259,10 @@ class MainWindow(QMainWindow):
             )
             return
 
-        file_path, file_format = self.file_accessor.select_save_as_file(self)
+        file_path, file_format = self.file_accessor.select_save_as_file(
+            self,
+            self.ExpId.text(),
+        )
 
         if not file_path:
             Logger.log("Сохранение отменено", LogLevel.WARNING)
@@ -501,44 +504,6 @@ class MainWindow(QMainWindow):
             self.database_accessor.get_comments()
         )
         Logger.log("Комментарий удалён")
-
-    # ------------------------------------------------------------------
-    # Экспорт в Excel
-    # ------------------------------------------------------------------
-
-    # def excel_export(self):
-    #     """Экспортирует общие данные и комментарии в Excel."""
-    #     if not self.database_accessor.is_open():
-    #         Logger.log(
-    #             "Невозможно выполнить экспорт: "
-    #             "нет открытого испытания",
-    #             LogLevel.ERROR,
-    #         )
-    #         return
-    #
-    #     file_path = self.file_accessor.select_save_excel_file(self)
-    #
-    #     if not file_path:
-    #         Logger.log("Экспорт в Excel отменён")
-    #         return
-    #
-    #     try:
-    #         exp_data = self.get_exp_data_from_ui()
-    #         comments = self.database_accessor.get_comments()
-    #
-    #         ExcelExporter.export(
-    #             file_path=file_path,
-    #             exp_data=exp_data,
-    #             comments=comments,
-    #         )
-    #
-    #         Logger.log(f"Экспорт в Excel завершён: {file_path}")
-
-        # except Exception as error:
-        #     Logger.log(
-        #         f"Ошибка при экспорте в Excel: {error}",
-        #         LogLevel.ERROR,
-        #     )
 
     # ------------------------------------------------------------------
     # Поиск прибора № 1
