@@ -49,9 +49,14 @@ def probe(connection: serial.Serial, slave_id: int) -> str | None:
     Проверяет Modbus ID и возвращает идентификатор изделия,
     только если ответ соответствует ожидаемому формату GLine.
     """
-    connection.reset_input_buffer()
-    connection.write(build_identification_request(slave_id))
-    connection.flush()
+    request = build_identification_request(slave_id)
+
+    connection.write(request)
+
+    # connection.flush()
+    # Временно отключён из-за зависания при использовании
+    # HHD Virtual Serial Port Tools. При необходимости можно вернуть,
+    # например, при работе с другим драйвером COM-порта.
 
     header = connection.read(3)
 
@@ -104,6 +109,8 @@ def probe(connection: serial.Serial, slave_id: int) -> str | None:
         return None
 
     return product_code
+
+
 # Предварительный пример структуры.
 # Реальные величины уточним по документации прибора.
 MEASUREMENT_DEFINITIONS = [

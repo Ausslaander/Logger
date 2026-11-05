@@ -97,7 +97,7 @@ def scan_device(device_module, log=None) -> list[dict]:
                     found_devices.append(device)
 
                     log(
-                        f"Найден прибор: модель={model}, "
+                        f"Найден прибор, модель: {model}, "
                         f"порт={port_name}, Modbus ID={slave_id}.",
                         LogLevel.INFO,
                     )
