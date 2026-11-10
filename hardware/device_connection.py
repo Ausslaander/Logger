@@ -34,6 +34,7 @@ class DeviceConnection:
             parity=self.device_module.PARITY,
             stopbits=self.device_module.STOPBITS,
             timeout=self.device_module.TIMEOUT,
+            write_timeout=self.device_module.TIMEOUT,
         )
         print("[DeviceConnection] connect(): завершение", flush=True)
 
@@ -50,7 +51,13 @@ class DeviceConnection:
 
         print("[DeviceConnection] check_connection(): завершение", flush=True)
 
-        return product_code is not None
+        expected = self.found_device.get("model")
+        return product_code is not None and (expected is None or product_code == expected)
+
+    def read_measurements(self) -> tuple:
+        return self.device_module.read_measurements(
+            self._connection, self.found_device["slave_id"]
+        )
 
     def disconnect(self) -> None:
         """Закрывает последовательный порт."""

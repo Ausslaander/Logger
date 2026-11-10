@@ -1,12 +1,12 @@
-import sqlite3
-
-from models.exp_data import ExpData
+from contextlib import closing, contextmanager
 from datetime import datetime
 from pathlib import Path
 
 import os
 import sqlite3
 import tempfile
+
+from models.exp_data import ExpData
 
 
 class DatabaseAccessor:
@@ -17,7 +17,7 @@ class DatabaseAccessor:
 
     def __init__(self):
         self.connection = None
-        self.in_memory_database = False
+        self.comments_dirty = False
 
     def create_database(self):
         """
@@ -29,7 +29,7 @@ class DatabaseAccessor:
 
         # Создаём базу данных в оперативной памяти.
         self.connection = sqlite3.connect(":memory:")
-        self.in_memory_database = True
+        self.comments_dirty = False
 
         # Создаём таблицу с общими данными испытания.
         self.connection.execute("""
@@ -70,30 +70,23 @@ class DatabaseAccessor:
 
     def open_database(self, file_path: str):
         """
-        Открывает существующую базу данных SQLite.
-
-        Новое соединение становится текущим только после проверки
-        структуры базы и наличия данных испытания.
-        При ошибке прежнее соединение сохраняется.
+        Загружает рабочую копию существующей базы SQLite в память.
         """
-        if not Path(file_path).is_file():
+        source_path = Path(file_path).resolve()
+        if not source_path.is_file():
             raise FileNotFoundError(
                 f"Файл базы данных не найден: {file_path}"
             )
 
-        new_connection = None
+        source_uri = source_path.as_uri() + "?mode=ro"
+        new_connection = sqlite3.connect(":memory:")
 
         try:
-            new_connection = sqlite3.connect(
-                file_path,
-                timeout=5,
-            )
-
+            with closing(sqlite3.connect(source_uri, uri=True)) as source:
+                self._backup(source, new_connection)
             self._validate_database(new_connection)
-
         except Exception:
-            if new_connection is not None:
-                new_connection.close()
+            new_connection.close()
             raise
 
         # Новая база проверена. Теперь можно заменить соединение.
@@ -107,7 +100,36 @@ class DatabaseAccessor:
             raise
 
         self.connection = new_connection
-        self.in_memory_database = False
+        self.comments_dirty = False
+
+    @staticmethod
+    def _backup(source: sqlite3.Connection, target: sqlite3.Connection):
+        def check_progress(status, _remaining, _total):
+            if status in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                raise sqlite3.OperationalError("Файл базы данных занят.")
+
+        source.backup(target, progress=check_progress)
+
+    @contextmanager
+    def stage_measurements(self, journal):
+        """Подмешивает журнал к копии базы на время сохранения."""
+        if not journal.exists():
+            yield
+            return
+
+        original = self.connection
+        staged = sqlite3.connect(":memory:")
+        try:
+            self._backup(original, staged)
+            journal.apply(staged)
+            self.connection = staged
+            yield
+        except BaseException:
+            self.connection = original
+            staged.close()
+            raise
+        else:
+            original.close()
 
     @staticmethod
     def _validate_database(connection: sqlite3.Connection):
@@ -254,109 +276,41 @@ class DatabaseAccessor:
         if self.connection is None:
             raise RuntimeError("Нет открытой базы данных")
 
-        self.connection.execute("""
-            UPDATE exp
-            SET
-                exp_id             = ?,
-                product_name       = ?,
-                executor_name      = ?,
-                exp_date           = ?,
-                description        = ?
-            WHERE id = 1
-        """, (
-            exp_data.exp_id,
-            exp_data.product_name,
-            exp_data.executor_name,
-            exp_data.exp_date,
-            exp_data.description
-        ))
+        self._write_data(self.connection, exp_data)
 
-        self.connection.commit()
+    @staticmethod
+    def _write_data(connection: sqlite3.Connection, exp_data: ExpData):
+        with connection:
+            connection.execute("""
+                UPDATE exp
+                SET exp_id = ?,
+                    product_name = ?,
+                    executor_name = ?,
+                    exp_date = ?,
+                    description = ?
+                WHERE id = 1
+            """, (
+                exp_data.exp_id,
+                exp_data.product_name,
+                exp_data.executor_name,
+                exp_data.exp_date,
+                exp_data.description,
+            ))
 
     def save_database(self, file_path: str):
-        """
-        Сохраняет текущую базу данных.
-
-        Для базы в RAM:
-        1. Создаёт временный SQLite-файл.
-        2. Копирует в него данные.
-        3. Проверяет корректность базы.
-        4. Атомарно заменяет файл назначения.
-        5. Переключается на файловое соединение.
-
-        Для уже файловой базы фиксирует изменения через commit().
-        """
+        """Сохраняет рабочую копию в текущий SQLite-файл."""
         if self.connection is None:
             raise RuntimeError("Нет открытой базы данных")
 
-        # Для уже сохранённой базы достаточно зафиксировать изменения.
-        if not self.in_memory_database:
-            self.connection.commit()
+        destination = Path(file_path).resolve()
+        if not destination.exists():
+            self.save_database_as(file_path)
             return
 
-        destination_path = Path(file_path).resolve()
-        destination_dir = destination_path.parent
-
-        if not destination_dir.is_dir():
-            raise FileNotFoundError(
-                f"Каталог назначения не существует: {destination_dir}"
-            )
-
-        temporary_path = None
-        new_connection = None
-
-        try:
-            # Временный файл создаётся в том же каталоге,
-            # чтобы os.replace() мог выполнить атомарную замену.
-            file_descriptor, temporary_name = tempfile.mkstemp(
-                prefix=f".{destination_path.stem}_",
-                suffix=".sqlite",
-                dir=destination_dir,
-            )
-            os.close(file_descriptor)
-            temporary_path = Path(temporary_name)
-
-            # Копируем базу во временный файл.
-            target = sqlite3.connect(str(temporary_path), timeout=5)
-
-            try:
-                self.connection.backup(target)
-                self._validate_database(target)
-            finally:
-                # В Windows обязательно закрываем соединение
-                # до попытки заменить файл.
-                target.close()
-
-            # К этому моменту временная база уже закрыта.
-            os.replace(temporary_path, destination_path)
-            temporary_path = None
-
-            # Проверяем возможность открыть итоговый файл.
-            new_connection = sqlite3.connect(
-                str(destination_path),
-                timeout=5,
-            )
-            self._validate_database(new_connection)
-
-            # Переключаемся на файловую базу только после проверки.
-            old_connection = self.connection
-            old_connection.close()
-
-            self.connection = new_connection
-            self.in_memory_database = False
-            new_connection = None
-
-        finally:
-            if new_connection is not None:
-                new_connection.close()
-
-            # Удаляем временный файл, если он ещё существует.
-            if temporary_path is not None:
-                try:
-                    temporary_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
-
+        destination_uri = destination.as_uri() + "?mode=rw"
+        with closing(sqlite3.connect(destination_uri, uri=True)) as target:
+            self._backup(self.connection, target)
+        self.comments_dirty = False
 
     def is_open(self) -> bool:
         """
@@ -373,7 +327,11 @@ class DatabaseAccessor:
         cursor = self.connection.execute("""
             SELECT id, created_at, last_edited, text
             FROM comments
-            ORDER BY created_at
+            -- Даты хранятся как ДД.ММ.ГГГГ ЧЧ:ММ:СС.
+            ORDER BY substr(created_at, 7, 4),
+                     substr(created_at, 4, 2),
+                     substr(created_at, 1, 2),
+                     substr(created_at, 12), id
         """)
         return cursor.fetchall()
 
@@ -381,14 +339,12 @@ class DatabaseAccessor:
         if self.connection is None:
             raise RuntimeError("Нет открытой базы данных")
         created_at = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        last_edited = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-
-        self.connection.execute("""
-                                INSERT INTO comments (created_at, last_edited, text)
-                                VALUES (?, ?, ?)
-                                """, (created_at, last_edited, text))
-
-        self.connection.commit()
+        with self.connection:
+            self.connection.execute("""
+                INSERT INTO comments (created_at, last_edited, text)
+                VALUES (?, ?, ?)
+            """, (created_at, created_at, text))
+        self.comments_dirty = True
 
     def update_comment(self, comment_id: int, text: str):
         if self.connection is None:
@@ -396,29 +352,28 @@ class DatabaseAccessor:
 
         last_edited = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
 
-        self.connection.execute("""
-                                UPDATE comments
-                                SET last_edited = ?,
-                                    text        = ?
-                                WHERE id = ?
-                                """, (last_edited, text, comment_id))
-
-        self.connection.commit()
+        with self.connection:
+            result = self.connection.execute("""
+                UPDATE comments
+                SET last_edited = ?, text = ?
+                WHERE id = ?
+            """, (last_edited, text, comment_id))
+        if result.rowcount:
+            self.comments_dirty = True
 
     def delete_comment(self, comment_id: int):
         if self.connection is None:
             raise RuntimeError("Нет открытой базы данных")
 
-        self.connection.execute("""
-                                DELETE
-                                FROM comments
-                                WHERE id = ?
-                                """, (comment_id,))
-
-        self.connection.commit()
+        with self.connection:
+            result = self.connection.execute(
+                "DELETE FROM comments WHERE id = ?", (comment_id,)
+            )
+        if result.rowcount:
+            self.comments_dirty = True
 
     def save_database_as(self, file_path: str):
-        """Сохраняет копию базы в новый файл и переключает соединение."""
+        """Сохраняет рабочую копию базы по новому пути."""
         if self.connection is None:
             raise RuntimeError("Нет открытой базы данных")
 
@@ -430,7 +385,6 @@ class DatabaseAccessor:
             )
 
         temporary_path = None
-        new_connection = None
 
         try:
             fd, temp_name = tempfile.mkstemp(
@@ -443,7 +397,7 @@ class DatabaseAccessor:
 
             target = sqlite3.connect(str(temporary_path), timeout=5)
             try:
-                self.connection.backup(target)
+                self._backup(self.connection, target)
                 self._validate_database(target)
             finally:
                 target.close()
@@ -452,23 +406,9 @@ class DatabaseAccessor:
             os.replace(temporary_path, destination)
             temporary_path = None
 
-            new_connection = sqlite3.connect(
-                str(destination),
-                timeout=5,
-            )
-            self._validate_database(new_connection)
-
-            old_connection = self.connection
-            old_connection.close()
-
-            self.connection = new_connection
-            self.in_memory_database = False
-            new_connection = None
+            self.comments_dirty = False
 
         finally:
-            if new_connection is not None:
-                new_connection.close()
-
             if temporary_path is not None:
                 try:
                     temporary_path.unlink(missing_ok=True)

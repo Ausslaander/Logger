@@ -6,7 +6,7 @@ from services.internal_logger import InternalLogger as Logger
 from services.internal_logger import LogLevel
 
 
-def scan_device(device_module, log=None) -> list[dict]:
+def scan_device(device_module, log=None, should_stop=None) -> list[dict]:
     """
     Ищет прибор заданной модели на доступных последовательных портах.
 
@@ -15,6 +15,7 @@ def scan_device(device_module, log=None) -> list[dict]:
         TIMEOUT, SLAVE_IDS и функцию probe(connection, slave_id).
 
     log — функция вида log(message, level).
+    should_stop — проверка запроса на отмену между операциями с портом.
 
     Возвращает список словарей:
         {"port": str, "slave_id": int, "model": str}
@@ -51,6 +52,8 @@ def scan_device(device_module, log=None) -> list[dict]:
     )
 
     for port_info in ports:
+        if should_stop is not None and should_stop():
+            return []
         port_name = port_info.device
 
         try:
@@ -65,6 +68,8 @@ def scan_device(device_module, log=None) -> list[dict]:
             ) as connection:
 
                 for index, slave_id in enumerate(slave_ids, start=1):
+                    if should_stop is not None and should_stop():
+                        return []
                     log(
                         f"Проверка порта {port_name}: "
                         f"Modbus ID {slave_id} "

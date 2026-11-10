@@ -1,4 +1,5 @@
-from models.measurement import MeasurementDefinition
+from struct import pack, unpack
+
 import serial
 
 
@@ -111,13 +112,43 @@ def probe(connection: serial.Serial, slave_id: int) -> str | None:
     return product_code
 
 
-# Предварительный пример структуры.
-# Реальные величины уточним по документации прибора.
-MEASUREMENT_DEFINITIONS = [
-    # MeasurementDefinition(
-    #     key="output_power",
-    #     name="Выходная мощность",
-    #     unit="W",
-    #     precision=2,
-    # ),
-]
+# Адрес, заголовок и делитель по таблице чтения в разделе 11 РЭ.
+_MEASUREMENTS = (
+    (25, "Падающая мощность (пиковая), Вт", 1),
+    (26, "Падающая мощность (средняя), Вт", 1),
+    (27, "Мощность в нагрузке (пиковая), Вт", 1),
+    (28, "Мощность в нагрузке (средняя), Вт", 1),
+    (29, "Отражённая мощность (пиковая), Вт", 1),
+    (30, "Отражённая мощность (средняя), Вт", 1),
+    (4, "Уставка падающей мощности, Вт", 1),
+    (5, "Уставка мощности в нагрузке, Вт", 1),
+    (6, "Уставка напряжения внешнего зонда, В", 1),
+    (13, "Частота импульсов АИМ, Гц", 1),
+    (10, "Длительность импульсов АИМ, мс", 1),
+    (11, "Скважность импульсов", 10),
+    (12, "Коэффициент заполнения импульсов, %", 1),
+    (7, "Мощность в паузе, Вт", 1),
+    (16, "Порог отражённой мощности для таймера КСВ, Вт", 1),
+    (18, "Рабочая частота генератора, кГц", 10),
+)
+MEASUREMENT_COLUMNS = tuple(title for _, title, _ in _MEASUREMENTS)
+
+
+def read_measurements(connection: serial.Serial, slave_id: int) -> tuple:
+    """Возвращает один набор значений в порядке MEASUREMENT_COLUMNS."""
+    first, last = 4, 30
+    count = last - first + 1
+    connection.reset_input_buffer()
+    connection.write(append_crc(pack(">BBHH", slave_id, 0x03, first, count)))
+    header = connection.read(3)
+    if header != bytes((slave_id, 0x03, count * 2)):
+        raise OSError("Некорректный заголовок ответа GLine.")
+    tail = connection.read(count * 2 + 2)
+    if len(tail) != count * 2 + 2 or append_crc(header + tail[:-2]) != header + tail:
+        raise OSError("Неполный ответ GLine или ошибка CRC.")
+
+    registers = unpack(f">{count}H", tail[:-2])
+    return tuple(
+        registers[address - first] if divisor == 1 else registers[address - first] / divisor
+        for address, _, divisor in _MEASUREMENTS
+    )

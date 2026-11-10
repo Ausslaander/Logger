@@ -1,3 +1,6 @@
+from collections import defaultdict
+import re
+
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -10,10 +13,11 @@ class ExcelExporter:
     def export(
         file_path: str,
         exp_data,
-        comments: list[tuple]
+        comments: list[tuple],
+        measurements=(),
     ):
         """
-        Создаёт Excel-книгу с общими данными и комментариями.
+        Создаёт Excel-книгу с общими данными, комментариями и измерениями.
 
         Args:
             file_path: путь для сохранения XLSX-файла.
@@ -58,8 +62,18 @@ class ExcelExporter:
                 text,
             ])
 
-        # Оформление заголовков обоих листов.
-        for sheet in (general_sheet, comments_sheet):
+        groups = defaultdict(list)
+        for row in measurements:
+            groups[row.device].append(row)
+        for device, rows in groups.items():
+            title = re.sub(r"[\\/*?:\[\]]", " ", device.replace(" / ", " "))
+            sheet = workbook.create_sheet(title[:31])
+            columns = tuple(dict.fromkeys(column for row in rows for column in row.columns))
+            sheet.append(("Временная метка", *columns, "Примечание"))
+            for row in rows:
+                sheet.append(row.cells(columns))
+
+        for sheet in workbook.worksheets:
             for cell in sheet[1]:
                 cell.font = Font(bold=True, color="FFFFFF")
                 cell.fill = PatternFill(
@@ -74,23 +88,10 @@ class ExcelExporter:
 
             sheet.freeze_panes = "A2"
 
-        # Выравнивание и перенос текста.
-        for row in general_sheet.iter_rows(min_row=2):
-            for cell in row:
-                cell.alignment = Alignment(
-                    vertical="top",
-                    wrap_text=True,
-                )
+            for row in sheet.iter_rows(min_row=2):
+                for cell in row:
+                    cell.alignment = Alignment(vertical="top", wrap_text=True)
 
-        for row in comments_sheet.iter_rows(min_row=2):
-            for cell in row:
-                cell.alignment = Alignment(
-                    vertical="top",
-                    wrap_text=True,
-                )
-
-        # Подбор ширины столбцов с ограничением максимальной ширины.
-        for sheet in (general_sheet, comments_sheet):
             for column in sheet.columns:
                 column_letter = get_column_letter(column[0].column)
 

@@ -3,18 +3,20 @@ from datetime import datetime
 import os
 
 from PyQt6 import uic
-from PyQt6.QtCore import QDate, Qt, pyqtSlot, QThread
+from PyQt6.QtCore import QDate, Qt, pyqtSlot, QThread, QTimer
 from PyQt6.QtWidgets import (
     QMainWindow,
     QDialog,
     QTableWidgetItem,
     QAbstractItemView,
     QHeaderView,
+    QMessageBox,
 )
 
 from config import MAIN_WINDOW_UI
 from accessors.file_accessor import FileAccessor
 from accessors.database_accessor import DatabaseAccessor
+from accessors.measurement_journal import MeasurementJournal
 from services.internal_logger import InternalLogger as Logger
 from services.internal_logger import LogLevel
 from services.excel_exporter import ExcelExporter
@@ -41,6 +43,9 @@ class MainWindow(QMainWindow):
         self.file_accessor = FileAccessor()
         self.database_accessor = DatabaseAccessor()
         self.current_file_path = None
+        self._saved_exp_data = None
+        self._saved_comments = []
+        self._closing = False
 
         self._device_search_thread = None
         self._device_search_worker = None
@@ -132,8 +137,67 @@ class MainWindow(QMainWindow):
         self.EditCommentButton.setEnabled(editable)
         self.DeleteCommentButton.setEnabled(editable)
 
+    def _confirm_leave_experiment(self) -> bool:
+        if not self.database_accessor.is_open():
+            return True
+        comments_changed = (
+            self.database_accessor.comments_dirty
+            and self.database_accessor.get_comments() != self._saved_comments
+        )
+        recording = self._device1_window is not None and self._device1_window.is_recording
+        if (
+            not recording
+            and not self.measurement_journal().exists()
+            and not comments_changed
+            and self.get_exp_data_from_ui() == self._saved_exp_data
+        ):
+            return True
+
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Несохранённое испытание")
+        dialog.setIcon(QMessageBox.Icon.Question)
+        dialog.setText(
+            "Изменения текущего испытания остались несохраненными. Сохранить изменения перед продолжением?"
+        )
+        roles = QMessageBox.ButtonRole
+        save = dialog.addButton("Сохранить", roles.AcceptRole)
+        discard = dialog.addButton("Продолжить без сохранения", roles.DestructiveRole)
+        cancel = dialog.addButton("Отмена", roles.RejectRole)
+        dialog.setDefaultButton(cancel)
+        dialog.setEscapeButton(cancel)
+        dialog.exec()
+        choice = dialog.clickedButton()
+        if choice is save:
+            if self._device1_window is not None:
+                self._device1_window.stop_recording()
+            return self.save_exp()
+        return choice is discard
+
+    def measurement_journal(self) -> MeasurementJournal:
+        return MeasurementJournal(self.current_file_path)
+
+    def measurement_rows(self):
+        return self.measurement_journal().rows(self.database_accessor.connection)
+
+    def ensure_measurement_file(self) -> bool:
+        return self.current_file_path is not None or self.save_exp()
+
+    def _clear_measurement_journal(self, journal):
+        try:
+            journal.clear()
+        except OSError as error:
+            Logger.log(f"Не удалось удалить журнал измерений: {error}", LogLevel.WARNING)
+
+    def _leave_measurements(self):
+        if self._device1_window is not None:
+            self._device1_window.close()
+        self._clear_measurement_journal(self.measurement_journal())
+
     def create_exp(self):
         """Создаёт новое испытание в оперативной памяти."""
+        if not self._confirm_leave_experiment():
+            return
+
         try:
             self.database_accessor.create_database()
         except Exception as error:
@@ -143,6 +207,7 @@ class MainWindow(QMainWindow):
             )
             return
 
+        self._leave_measurements()
         self.current_file_path = None
         self.CurrentExp.setText("Новый файл")
 
@@ -151,6 +216,8 @@ class MainWindow(QMainWindow):
         self.ExecutorName.clear()
         self.ExpDescription.clear()
         self.ExpDate.setDate(QDate.currentDate())
+        self._saved_exp_data = self.get_exp_data_from_ui()
+        self._saved_comments = []
 
         self.set_comments_to_ui([])
         self.set_exp_editable(True)
@@ -165,21 +232,40 @@ class MainWindow(QMainWindow):
             Logger.log("Открытие файла отменено")
             return
 
+        recovery = MeasurementJournal(file_path)
+        restore = None
+        if not self._same_file(file_path) and recovery.exists():
+            restore = self._ask_measurement_recovery()
+            if restore is None:
+                return
+
+        if not self._confirm_leave_experiment():
+            return
+
         try:
+            if restore:
+                recovery.pending_rows()
             self.database_accessor.open_database(file_path)
 
             exp_data = self.database_accessor.get_data()
             comments = self.database_accessor.get_comments()
 
+            self._leave_measurements()
+            if restore is False:
+                self._clear_measurement_journal(recovery)
             self.set_exp_data_to_ui(exp_data)
             self.set_comments_to_ui(comments)
 
             self.current_file_path = file_path
+            self._saved_exp_data = self.get_exp_data_from_ui()
+            self._saved_comments = comments
             self.CurrentExp.setText(file_path)
 
             self.set_exp_editable(True)
 
             Logger.log(f"Открыто испытание: {file_path}")
+            if restore:
+                Logger.log("Строки из временного журнала восстановлены. Сохраните испытание.")
 
         except Exception as error:
             Logger.log(
@@ -187,31 +273,79 @@ class MainWindow(QMainWindow):
                 LogLevel.ERROR,
             )
 
-    def save_exp(self):
+    def save_exp(self) -> bool:
         """Сохраняет испытание в текущий файл."""
         if not self.database_accessor.is_open():
             Logger.log(
                 "Невозможно сохранить испытание: нет открытого испытания",
                 LogLevel.ERROR,
             )
-            return
+            return False
 
-        if self.current_file_path is None:
-            self.save_as_exp()
-            return
-
+        file_path = self.current_file_path
+        if file_path is None:
+            file_path = self.file_accessor.select_save_file(self, self.ExpId.text())
+            if not file_path:
+                Logger.log("Сохранение отменено", LogLevel.WARNING)
+                return False
         try:
             exp_data = self.get_exp_data_from_ui()
-            self.database_accessor.set_data(exp_data)
-            self.database_accessor.save_database(self.current_file_path)
-
-            Logger.log(f"Испытание сохранено: {self.current_file_path}")
+            self._save_sqlite(file_path, exp_data)
+            return True
 
         except Exception as error:
             Logger.log(
                 f"Ошибка при сохранении испытания: {error}",
                 LogLevel.ERROR,
             )
+            return False
+
+    def _ask_measurement_recovery(self) -> bool | None:
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Восстановление измерений")
+        dialog.setIcon(QMessageBox.Icon.Question)
+        dialog.setText("Найден временный журнал измерений. Восстановить строки?")
+        roles = QMessageBox.ButtonRole
+        restore = dialog.addButton("Восстановить", roles.AcceptRole)
+        discard = dialog.addButton("Удалить журнал", roles.DestructiveRole)
+        cancel = dialog.addButton("Отмена", roles.RejectRole)
+        dialog.setDefaultButton(cancel)
+        dialog.setEscapeButton(cancel)
+        dialog.exec()
+        if dialog.clickedButton() is restore:
+            return True
+        if dialog.clickedButton() is discard:
+            return False
+        return None
+
+    def _same_file(self, file_path: str) -> bool:
+        if self.current_file_path is None:
+            return False
+        try:
+            return os.path.samefile(file_path, self.current_file_path)
+        except OSError:
+            return os.path.normcase(os.path.realpath(file_path)) == (
+                os.path.normcase(os.path.realpath(self.current_file_path))
+            )
+
+    def _save_sqlite(self, file_path: str, exp_data: ExpData):
+        same_file = self._same_file(file_path)
+        if not same_file and MeasurementJournal(file_path).exists():
+            raise ValueError("У файла назначения есть временный журнал. Откройте файл или выберите другой путь.")
+        journal = self.measurement_journal()
+        self.database_accessor.set_data(exp_data)
+        with self.database_accessor.stage_measurements(journal):
+            if same_file:
+                self.database_accessor.save_database(file_path)
+            else:
+                self.database_accessor.save_database_as(file_path)
+        self._clear_measurement_journal(journal)
+
+        self.current_file_path = file_path
+        self._saved_exp_data = exp_data
+        self._saved_comments = self.database_accessor.get_comments()
+        self.CurrentExp.setText(file_path)
+        Logger.log(f"Испытание сохранено: {file_path}")
 
     def save_as_exp(self):
         """Сохраняет испытание в выбранном формате и месте."""
@@ -235,25 +369,7 @@ class MainWindow(QMainWindow):
             exp_data = self.get_exp_data_from_ui()
 
             if file_format == "sqlite":
-                self.database_accessor.set_data(exp_data)
-
-                same_path = (
-                    self.current_file_path is not None
-                    and os.path.normcase(os.path.abspath(file_path))
-                    == os.path.normcase(
-                        os.path.abspath(self.current_file_path)
-                    )
-                )
-
-                if same_path or self.current_file_path is None:
-                    self.database_accessor.save_database(file_path)
-                else:
-                    self.database_accessor.save_database_as(file_path)
-
-                self.current_file_path = file_path
-                self.CurrentExp.setText(file_path)
-
-                Logger.log(f"Испытание сохранено: {file_path}")
+                self._save_sqlite(file_path, exp_data)
 
             elif file_format == "xlsx":
                 comments = self.database_accessor.get_comments()
@@ -262,6 +378,7 @@ class MainWindow(QMainWindow):
                     file_path=file_path,
                     exp_data=exp_data,
                     comments=comments,
+                    measurements=self.measurement_rows(),
                 )
 
                 Logger.log(f"Экспорт в Excel завершён: {file_path}")
@@ -472,7 +589,7 @@ class MainWindow(QMainWindow):
     @pyqtSlot()
     def search_device1(self):
         """Запускает поиск выбранного прибора в отдельном потоке."""
-        if self._device_search_thread is not None:
+        if self._device_search_thread is not None or self._device1_window is not None:
             return
 
         device_id = self.Device1ComboBox.currentData()
@@ -548,6 +665,9 @@ class MainWindow(QMainWindow):
     @pyqtSlot(list)
     def _on_device_search_finished(self, devices: list):
         """Обрабатывает результаты поиска прибора."""
+        if self._closing:
+            return
+
         if not devices:
             self._found_device = None
             self.Device1SearchStatusLine.setText("Прибор не найден")
@@ -587,9 +707,14 @@ class MainWindow(QMainWindow):
         self._device_search_thread = None
         self._device_search_worker = None
 
-        self.Device1ComboBox.setEnabled(True)
+        if self._closing:
+            QTimer.singleShot(0, self.close)
+            return
+
+        available = self._device1_window is None
+        self.Device1ComboBox.setEnabled(available)
         self.Device1SearchButton.setEnabled(
-            self.Device1ComboBox.currentData() is not None
+            available and self.Device1ComboBox.currentData() is not None
         )
 
     def device1_window(self):
@@ -604,15 +729,21 @@ class MainWindow(QMainWindow):
             if device_module is None:
                 return
 
-            self._device1_window = DeviceWindow(
-                device_module=device_module,
-                found_device=self._found_device,
-                parent=self,
-            )
+            try:
+                self._device1_window = DeviceWindow(
+                    device_module=device_module,
+                    found_device=self._found_device,
+                    parent=self,
+                )
+            except Exception as error:
+                Logger.log(f"Не удалось открыть окно измерений: {error}", LogLevel.ERROR)
+                return
 
             self._device1_window.closed.connect(
                 self._on_device1_window_closed
             )
+            self.Device1ComboBox.setEnabled(False)
+            self.Device1SearchButton.setEnabled(False)
 
         self._device1_window.show()
         self._device1_window.raise_()
@@ -621,3 +752,23 @@ class MainWindow(QMainWindow):
     def _on_device1_window_closed(self):
         """Сбрасывает ссылку на закрытое окно измерений."""
         self._device1_window = None
+        if not self._closing and self._device_search_thread is None:
+            self.Device1ComboBox.setEnabled(True)
+            self.Device1SearchButton.setEnabled(self.Device1ComboBox.currentData() is not None)
+
+    def closeEvent(self, event):
+        if not self._closing:
+            if not self._confirm_leave_experiment():
+                event.ignore()
+                return
+            self._closing = True
+
+        if self._device_search_thread is not None:
+            self._device_search_thread.requestInterruption()
+            self.Device1SearchStatusLine.setText("Останавливается поиск...")
+            self.centralWidget().setEnabled(False)
+            event.ignore()
+            return
+
+        self._leave_measurements()
+        super().closeEvent(event)

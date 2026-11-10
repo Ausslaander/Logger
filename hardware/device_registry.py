@@ -1,9 +1,15 @@
-from hardware.devices import GLine_a1k0
+from importlib import import_module
+from pkgutil import iter_modules
+
+from hardware import devices
 
 
-DEVICE_MODULES = {
-    GLine_a1k0.DEVICE_ID: GLine_a1k0,
-}
+DEVICE_MODULES = {}
+for entry in iter_modules(devices.__path__):
+    if not entry.ispkg and not entry.name.startswith("_"):
+        module = import_module(f"{devices.__name__}.{entry.name}")
+        if hasattr(module, "DEVICE_ID"):
+            DEVICE_MODULES[module.DEVICE_ID] = module
 
 
 def get_available_devices() -> list[tuple[str, str]]:

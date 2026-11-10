@@ -22,6 +22,7 @@ class DeviceSearchWorker(QObject):
                 log=lambda message, level: self.log_message.emit(
                     message, level
                 ),
+                should_stop=self.thread().isInterruptionRequested,
             )
             self.finished.emit(devices)
 

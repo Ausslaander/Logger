@@ -1,5 +1,6 @@
 
 from threading import Event, get_ident
+from datetime import datetime
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -13,6 +14,7 @@ class DeviceMonitor(QThread):
     state_changed = pyqtSignal(object)
     error_occurred = pyqtSignal(str)
     manual_reconnect_changed = pyqtSignal(bool)
+    measurement_read = pyqtSignal(object, str, object)
 
     def __init__(
         self,
@@ -42,7 +44,7 @@ class DeviceMonitor(QThread):
         self._stop_event = Event()
         self._start_reconnect_event = Event()
         self._stop_reconnect_event = Event()
-        self._polling_paused = Event()
+        self.recording_session = None
 
         self._connection = None
         self._current_state = None
@@ -183,15 +185,16 @@ class DeviceMonitor(QThread):
                     f"[DeviceMonitor] Цикл #{iteration}, "
                     f"state={self._current_state}, "
                     f"manual_mode={manual_mode}, "
-                    f"failures={failures}, "
-                    f"polling_paused={self._polling_paused.is_set()}",
+                    f"failures={failures}",
                     flush=True,
                 )
 
-                # Во время записи не обрабатываем команды
-                # переподключения и не выполняем проверки связи.
-                if self._polling_paused.is_set():
-                    self._stop_event.wait(0.1)
+                session = self.recording_session
+                if session is not None:
+                    if self._poll_measurements(session):
+                        ever_online = True
+                    failures = 0
+                    self._wait()
                     continue
 
                 # Команда пользователя на запуск переподключения.
@@ -424,7 +427,6 @@ class DeviceMonitor(QThread):
             self._stop_event.clear()
             self._start_reconnect_event.clear()
             self._stop_reconnect_event.clear()
-            self._polling_paused.clear()
             self._current_state = None
             self._manual_reconnect_active = False
 
@@ -442,7 +444,7 @@ class DeviceMonitor(QThread):
             flush=True,
         )
 
-        if self.isRunning() and not self._polling_paused.is_set():
+        if self.isRunning() and self.recording_session is None:
             self._start_reconnect_event.set()
 
     def stop_reconnecting(self) -> None:
@@ -452,7 +454,7 @@ class DeviceMonitor(QThread):
             flush=True,
         )
 
-        if self.isRunning() and not self._polling_paused.is_set():
+        if self.isRunning() and self.recording_session is None:
             self._stop_reconnect_event.set()
 
     def stop_monitoring(self) -> None:
@@ -477,18 +479,16 @@ class DeviceMonitor(QThread):
                 flush=True,
             )
 
-    def pause_polling(self) -> None:
-        """Приостанавливает проверки связи."""
-        print(
-            "[DeviceMonitor] Опрос приостановлен",
-            flush=True,
-        )
-        self._polling_paused.set()
+    def _poll_measurements(self, session) -> bool:
+        try:
+            if not self._connection.is_connected and not self._connect_and_check():
+                raise OSError("Прибор не ответил на проверку связи.")
+            values = self._connection.read_measurements()
+        except OSError:
+            self._connection.disconnect()
+            values = None
 
-    def resume_polling(self) -> None:
-        """Возобновляет проверки связи."""
-        print(
-            "[DeviceMonitor] Опрос возобновлён",
-            flush=True,
-        )
-        self._polling_paused.clear()
+        timestamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
+        self._set_state(DeviceState.ONLINE if values is not None else DeviceState.OFFLINE)
+        self.measurement_read.emit(session, timestamp, values)
+        return values is not None

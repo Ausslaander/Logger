@@ -1,4 +1,6 @@
-from PyQt6.QtWidgets import QFileDialog, QWidget
+from pathlib import Path
+
+from PyQt6.QtWidgets import QFileDialog, QMessageBox, QWidget
 
 
 class FileAccessor:
@@ -23,7 +25,7 @@ class FileAccessor:
 
         return file_path
 
-    def select_save_file(self, parent: QWidget) -> str:
+    def select_save_file(self, parent: QWidget, exp_id: str = "") -> str:
         """
         Открывает диалоговое окно для выбора места сохранения файла.
 
@@ -31,14 +33,12 @@ class FileAccessor:
         :return: путь к выбранному файлу или пустая строка,
                  если сохранение было отменено.
         """
-        file_path, _ = QFileDialog.getSaveFileName(
-            parent,
-            "Сохранить файл",
-            "",
-            "SQLite database (*.sqlite)"
-        )
-
-        return file_path
+        dialog = QFileDialog(parent, "Сохранить испытание")
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setNameFilter("SQLite database (*.sqlite)")
+        dialog.setDefaultSuffix("sqlite")
+        dialog.selectFile(exp_id.strip() or "Новое испытание")
+        return dialog.selectedFiles()[0] if dialog.exec() else ""
 
     def select_save_as_file(
             self,
@@ -70,5 +70,15 @@ class FileAccessor:
 
         if not file_path.lower().endswith(extension):
             file_path += extension
+            if Path(file_path).exists():
+                buttons = QMessageBox.StandardButton
+                if QMessageBox.question(
+                    parent,
+                    "Подтверждение замены",
+                    f"Файл уже существует:\n{file_path}\n\nЗаменить его?",
+                    buttons.Yes | buttons.No,
+                    buttons.No,
+                ) != buttons.Yes:
+                    return "", ""
 
         return file_path, file_format
