@@ -22,6 +22,7 @@ class InternalLogger:
     def initialize(output: QPlainTextEdit):
         """Устанавливает виджет для вывода сообщений."""
         InternalLogger._output = output
+        output.setMaximumBlockCount(1000)
         InternalLogger._status_message = None
 
     @staticmethod

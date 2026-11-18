@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <ui version="4.0">
  <class>MainWindow</class>
  <widget class="QMainWindow" name="MainWindow">
@@ -6,158 +6,122 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>859</width>
-    <height>600</height>
+    <width>1280</width>
+    <height>880</height>
    </rect>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>760</width>
+    <height>480</height>
+   </size>
   </property>
   <property name="windowTitle">
    <string>Прибор 1</string>
   </property>
   <widget class="QWidget" name="centralwidget">
-   <widget class="QLabel" name="DeviceNameLabel">
-    <property name="geometry">
-     <rect>
-      <x>10</x>
-      <y>10</y>
-      <width>731</width>
-      <height>21</height>
-     </rect>
-    </property>
-    <property name="font">
-     <font>
-      <pointsize>14</pointsize>
-     </font>
-    </property>
-    <property name="text">
-     <string>&lt;Название прибора&gt;</string>
-    </property>
-   </widget>
-   <widget class="QLabel" name="DeviceStatusLabel">
-    <property name="geometry">
-     <rect>
-      <x>10</x>
-      <y>40</y>
-      <width>711</width>
-      <height>21</height>
-     </rect>
-    </property>
-    <property name="font">
-     <font>
-      <pointsize>14</pointsize>
-     </font>
-    </property>
-    <property name="text">
-     <string>&lt;Статус прибора&gt;</string>
-    </property>
-   </widget>
-   <widget class="QPushButton" name="StartRecordingButton">
-    <property name="geometry">
-     <rect>
-      <x>30</x>
-      <y>130</y>
-      <width>291</width>
-      <height>31</height>
-     </rect>
-    </property>
-    <property name="font">
-     <font>
-      <pointsize>14</pointsize>
-     </font>
-    </property>
-    <property name="text">
-     <string>Начать запись</string>
-    </property>
-   </widget>
-   <widget class="QPushButton" name="StopRecordingButton">
-    <property name="geometry">
-     <rect>
-      <x>330</x>
-      <y>130</y>
-      <width>291</width>
-      <height>31</height>
-     </rect>
-    </property>
-    <property name="font">
-     <font>
-      <pointsize>14</pointsize>
-     </font>
-    </property>
-    <property name="text">
-     <string>Остановить запись</string>
-    </property>
-   </widget>
-   <widget class="QTableWidget" name="MeasurementsTable">
-    <property name="geometry">
-     <rect>
-      <x>30</x>
-      <y>170</y>
-      <width>801</width>
-      <height>361</height>
-     </rect>
-    </property>
-   </widget>
-   <widget class="QPushButton" name="DeleteMeasurementButton">
-    <property name="geometry">
-     <rect>
-      <x>30</x>
-      <y>540</y>
-      <width>230</width>
-      <height>27</height>
-     </rect>
-    </property>
-    <property name="text">
-     <string>Удалить измерение</string>
-    </property>
-   </widget>
-   <widget class="QPushButton" name="StartReconnectingButton">
-    <property name="geometry">
-     <rect>
-      <x>30</x>
-      <y>90</y>
-      <width>291</width>
-      <height>31</height>
-     </rect>
-    </property>
-    <property name="font">
-     <font>
-      <pointsize>14</pointsize>
-     </font>
-    </property>
-    <property name="text">
-     <string>Восстановить подключение</string>
-    </property>
-   </widget>
-   <widget class="QPushButton" name="StopReconnectingButton">
-    <property name="geometry">
-     <rect>
-      <x>330</x>
-      <y>90</y>
-      <width>291</width>
-      <height>31</height>
-     </rect>
-    </property>
-    <property name="font">
-     <font>
-      <pointsize>14</pointsize>
-     </font>
-    </property>
-    <property name="text">
-     <string>Остановить переподключение</string>
-    </property>
-   </widget>
+   <layout class="QVBoxLayout" name="DeviceLayout">
+    <item>
+     <widget class="QLabel" name="DeviceNameLabel">
+      <property name="indent">
+       <number>12</number>
+      </property>
+      <property name="font">
+       <font>
+        <pointsize>14</pointsize>
+       </font>
+      </property>
+      <property name="text">
+       <string>&lt;Название прибора&gt;</string>
+      </property>
+      <property name="wordWrap">
+       <bool>true</bool>
+      </property>
+     </widget>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="DeviceStatusLayout">
+      <property name="leftMargin">
+       <number>12</number>
+      </property>
+      <property name="spacing">
+       <number>8</number>
+      </property>
+      <item alignment="Qt::AlignVCenter">
+       <widget class="QLabel" name="DeviceStatusIndicator">
+        <property name="minimumSize">
+         <size><width>14</width><height>14</height></size>
+        </property>
+        <property name="maximumSize">
+         <size><width>14</width><height>14</height></size>
+        </property>
+        <property name="styleSheet">
+         <string>background-color: #808080; border-radius: 7px;</string>
+        </property>
+        <property name="accessibleName">
+         <string>Состояние прибора</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="DeviceStatusLabel">
+        <property name="font">
+         <font><pointsize>14</pointsize></font>
+        </property>
+        <property name="text">
+         <string>&lt;Статус прибора&gt;</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="ControlsLayout">
+      <item>
+       <widget class="QPushButton" name="StartReconnectingButton">
+        <property name="text">
+         <string>Восстановить подключение</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="StopReconnectingButton">
+        <property name="text">
+         <string>Остановить переподключение</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="StartRecordingButton">
+        <property name="text">
+         <string>Начать запись</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="StopRecordingButton">
+        <property name="text">
+         <string>Остановить запись</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <widget class="QScrollArea" name="PlotsScrollArea">
+      <property name="widgetResizable">
+       <bool>true</bool>
+      </property>
+      <widget class="QWidget" name="PlotsContainer">
+       <layout class="QGridLayout" name="PlotsLayout" />
+      </widget>
+     </widget>
+    </item>
+   </layout>
   </widget>
-  <widget class="QMenuBar" name="menubar">
-   <property name="geometry">
-    <rect>
-     <x>0</x>
-     <y>0</y>
-     <width>859</width>
-     <height>21</height>
-    </rect>
-   </property>
-  </widget>
-  <widget class="QStatusBar" name="statusbar"/>
+  <widget class="QMenuBar" name="menubar" />
+  <widget class="QStatusBar" name="statusbar" />
  </widget>
- <resources/>
- <connections/>
+ <resources />
+ <connections />
 </ui>

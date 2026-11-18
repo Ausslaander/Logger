@@ -5,14 +5,14 @@ from uuid import uuid4
 
 from PyQt6 import uic
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import (
-    QAbstractItemView, QHeaderView, QMainWindow, QMessageBox, QTableWidgetItem,
-)
+from PyQt6.QtWidgets import QMainWindow, QMessageBox
 
 from accessors.measurement_journal import MeasurementRow
 from config import DEVICE_WINDOW_UI
 from hardware.device_monitor import DeviceMonitor
 from hardware.device_state import DeviceState
+from services.internal_logger import InternalLogger
+from views.MeasurementPlot import MeasurementPlot
 
 
 logger = logging.getLogger(__name__)
@@ -37,30 +37,20 @@ class DeviceWindow(QMainWindow):
         self._is_recording = False
         self._link_lost = False
         self._closing = False
-        self._rows = []
+        self._recording_notice = None
+        self._experiment_start_time = None
+        self._plot_elapsed = 0.0
         self.device_key = f"{device_module.DEVICE_ID} / {found_device['port']} / {found_device['slave_id']}"
 
         # Загружаем интерфейс до обращения к его элементам.
         uic.loadUi(DEVICE_WINDOW_UI, self)
-        self.MeasurementsTable.setColumnCount(len(device_module.MEASUREMENT_COLUMNS) + 2)
-        self.MeasurementsTable.setHorizontalHeaderLabels(
-            ("Временная метка", *device_module.MEASUREMENT_COLUMNS, "Примечание")
-        )
-        self.MeasurementsTable.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.MeasurementsTable.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.MeasurementsTable.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        header = self.MeasurementsTable.horizontalHeader()
-        header.setMinimumSectionSize(100)
-        header.resizeSections(QHeaderView.ResizeMode.ResizeToContents)
-        self.MeasurementsTable.setColumnWidth(0, 245)
-        self.MeasurementsTable.setColumnWidth(len(device_module.MEASUREMENT_COLUMNS) + 1, 280)
-        self.MeasurementsTable.hide()
-        self.DeleteMeasurementButton.setEnabled(False)
-        self.DeleteMeasurementButton.clicked.connect(self._delete_measurement)
-        self.MeasurementsTable.itemSelectionChanged.connect(self._update_delete_button)
-        for row in parent.measurement_rows():
-            if row.device == self.device_key:
-                self._show_row(row)
+        self.measurement_plots = []
+        for index in range(10):
+            plot = MeasurementPlot(device_module.PLOT_PARAMETERS, self)
+            self.PlotsLayout.addWidget(plot, index // 2, index % 2)
+            self.measurement_plots.append(plot)
+        self.PlotsLayout.setColumnStretch(0, 1)
+        self.PlotsLayout.setColumnStretch(1, 1)
 
         # Настраиваем подписи окна.
         self.DeviceNameLabel.setText(
@@ -73,6 +63,8 @@ class DeviceWindow(QMainWindow):
             f"Обнаружен: {self.found_device['port']}, "
             f"ID {self.found_device['slave_id']}"
         )
+        self.DeviceStatusLabel.setFont(self.DeviceNameLabel.font())
+        self.DeviceStatusIndicator.setToolTip(self.DeviceStatusLabel.text())
 
         # Подключаем кнопки записи.
         self.StartRecordingButton.clicked.connect(
@@ -134,16 +126,32 @@ class DeviceWindow(QMainWindow):
             DeviceState.RECONNECTING: "Восстановление связи...",
             DeviceState.CONNECTION_ERROR: "Ошибка подключения",
         }
+        status_colors = {
+            DeviceState.FOUND: "#808080",
+            DeviceState.CONNECTING: "#d99000",
+            DeviceState.ONLINE: "#249447",
+            DeviceState.CHECKING: "#d99000",
+            DeviceState.OFFLINE: "#d63c3c",
+            DeviceState.RECONNECTING: "#d99000",
+            DeviceState.CONNECTION_ERROR: "#d63c3c",
+        }
+        color = status_colors.get(state, "#808080")
 
         if self._is_recording:
             self.DeviceStatusLabel.setText(
                 "Нет связи. Ожидание прибора" if state != DeviceState.ONLINE else "Запись данных"
             )
+            if state == DeviceState.ONLINE:
+                color = "#3489df"
         else:
             self.DeviceStatusLabel.setText(
                 status_text.get(state, "Неизвестное состояние")
             )
 
+        self.DeviceStatusIndicator.setStyleSheet(
+            f"background-color: {color}; border-radius: 7px;"
+        )
+        self.DeviceStatusIndicator.setToolTip(self.DeviceStatusLabel.text())
         self._update_reconnect_buttons()
         self._update_recording_buttons()
 
@@ -189,17 +197,25 @@ class DeviceWindow(QMainWindow):
             return
         if self._closing or self._current_device_state != DeviceState.ONLINE:
             return
-        if not self._append_rows([self._new_row(note="Начало записи")]):
+        start_row = self._new_row(note="Начало записи")
+        try:
+            start_time = self.parent().measurement_start_time()
+            if start_time is None:
+                start_time = datetime.fromisoformat(start_row.timestamp).timestamp()
+        except Exception as error:
+            QMessageBox.warning(self, "Ошибка истории измерений", str(error))
+            return
+        if not self._append_rows([start_row]):
             return
 
+        self._experiment_start_time = start_time
+        for plot in self.measurement_plots:
+            plot.clear()
         self._link_lost = False
         self._is_recording = True
         self.device_monitor.recording_session = object()
 
-        self._update_recording_buttons()
-        self._update_reconnect_buttons()
-
-        self.DeviceStatusLabel.setText("Запись данных")
+        self._on_device_state_changed(self._current_device_state)
 
     @property
     def is_recording(self) -> bool:
@@ -231,26 +247,21 @@ class DeviceWindow(QMainWindow):
             QMessageBox.warning(self, "Ошибка журнала измерений", str(error))
             return False
         for row in rows:
-            self._show_row(row)
+            self._log_measurement(row)
         return True
 
-    def _show_row(self, row):
-        table = self.MeasurementsTable
-        scroll = table.verticalScrollBar()
-        follow = scroll.value() == scroll.maximum()
-        index = table.rowCount()
-        table.insertRow(index)
-        self._rows.append(row)
-        for column, value in enumerate(row.cells(self.device_module.MEASUREMENT_COLUMNS)):
-            table.setItem(index, column, QTableWidgetItem(str(value)))
-        table.show()
-        if follow:
-            table.scrollToBottom()
+    def _log_measurement(self, row):
+        message = row.note or "; ".join(
+            f"{column} = {value}"
+            for column, value in zip(row.columns, row.values)
+        )
+        InternalLogger.log(f"{row.device} [{row.timestamp}] {message}")
 
     def _on_measurement_read(self, session, timestamp, values):
         if session is not self.device_monitor.recording_session:
             return
         if values is None:
+            self._update_plots(timestamp, {})
             if not self._link_lost:
                 self._link_lost = True
                 self._append_rows([self._new_row(timestamp, note="Связь потеряна")])
@@ -261,43 +272,23 @@ class DeviceWindow(QMainWindow):
             rows.append(self._new_row(timestamp, note="Связь восстановлена после обрыва"))
             self._link_lost = False
         rows.append(self._new_row(timestamp, values))
-        self._append_rows(rows)
+        if self._append_rows(rows):
+            self._update_plots(timestamp, dict(zip(self.device_module.MEASUREMENT_COLUMNS, values)))
+
+    def _update_plots(self, timestamp, values):
+        sample_time = datetime.fromisoformat(timestamp).timestamp()
+        # Все графики используют одинаковое время даже при коррекции часов ПК.
+        self._plot_elapsed = max(
+            self._plot_elapsed, sample_time - self._experiment_start_time, 0.0
+        )
+        for plot in self.measurement_plots:
+            plot.add_sample(self._plot_elapsed, values)
 
     def _on_monitor_finished(self):
         if not self._closing:
             self._current_device_state = DeviceState.OFFLINE
             self.stop_recording()
             self._on_device_state_changed(DeviceState.OFFLINE)
-
-    def _update_delete_button(self):
-        index = self.MeasurementsTable.currentRow()
-        self.DeleteMeasurementButton.setEnabled(
-            0 <= index < len(self._rows) and not self._rows[index].note
-        )
-
-    def _delete_measurement(self):
-        index = self.MeasurementsTable.currentRow()
-        if not 0 <= index < len(self._rows) or self._rows[index].note:
-            return
-        dialog = QMessageBox(self)
-        dialog.setWindowTitle("Удаление измерения")
-        dialog.setIcon(QMessageBox.Icon.Warning)
-        dialog.setText("Удалить выбранное измерение?")
-        delete = dialog.addButton("Удалить", QMessageBox.ButtonRole.DestructiveRole)
-        cancel = dialog.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
-        dialog.setDefaultButton(cancel)
-        dialog.setEscapeButton(cancel)
-        dialog.exec()
-        if dialog.clickedButton() is not delete:
-            return
-        try:
-            self.parent().measurement_journal().delete(self._rows[index])
-        except Exception as error:
-            QMessageBox.warning(self, "Ошибка удаления", str(error))
-            return
-        self._rows.pop(index)
-        self.MeasurementsTable.removeRow(index)
-        self._update_delete_button()
 
     def _update_recording_buttons(self) -> None:
         online = (
@@ -315,7 +306,27 @@ class DeviceWindow(QMainWindow):
             and not self._closing
         )
 
+    def show_recording_notice(self):
+        if self._recording_notice is None:
+            self._recording_notice = QMessageBox(self)
+            self._recording_notice.setWindowTitle("Идёт запись измерений")
+            self._recording_notice.setIcon(QMessageBox.Icon.Information)
+            self._recording_notice.setModal(False)
+            self._recording_notice.setText(
+                "Идёт активная запись измерений. Закрыть окно невозможно. "
+                "Сначала нажмите «Остановить запись»."
+            )
+            self._recording_notice.addButton("Понятно", QMessageBox.ButtonRole.AcceptRole)
+        self._recording_notice.show()
+        self._recording_notice.raise_()
+        self._recording_notice.activateWindow()
+
     def closeEvent(self, event):
+        if self._is_recording:
+            event.ignore()
+            self.show_recording_notice()
+            return
+
         if self._closing:
             event.accept()
             return

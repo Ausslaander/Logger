@@ -2,6 +2,7 @@ from struct import pack, unpack
 
 import serial
 
+from models.measurement import MeasurementDefinition
 
 DEVICE_ID = "GLine_a1k0"
 DISPLAY_NAME = (
@@ -132,6 +133,17 @@ _MEASUREMENTS = (
     (18, "Рабочая частота генератора, кГц", 10),
 )
 MEASUREMENT_COLUMNS = tuple(title for _, title, _ in _MEASUREMENTS)
+
+# key соответствует столбцу в результате read_measurements.
+# Список можно сократить, если часть параметров прибора не нужна на графиках.
+PLOT_PARAMETERS = []
+for _, title, _ in _MEASUREMENTS:
+    name, separator, unit = title.rpartition(", ")
+    PLOT_PARAMETERS.append(MeasurementDefinition(
+        key=title,
+        name=name if separator else title,
+        unit=unit if separator else "",
+    ))
 
 
 def read_measurements(connection: serial.Serial, slave_id: int) -> tuple:

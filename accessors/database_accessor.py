@@ -6,7 +6,10 @@ import os
 import sqlite3
 import tempfile
 
+from PyQt6.QtCore import QLockFile
+
 from models.exp_data import ExpData
+from accessors.measurement_journal import MeasurementJournal
 
 
 class DatabaseAccessor:
@@ -18,6 +21,31 @@ class DatabaseAccessor:
     def __init__(self):
         self.connection = None
         self.comments_dirty = False
+        self.file_lock = None
+        self._file_path = None
+
+    def acquire_file_lock(self, file_path: str):
+        path = Path(file_path).resolve()
+        if self.file_lock is not None and path == self._file_path:
+            return self.file_lock
+        lock = QLockFile(str(path) + ".logger-lock")
+        # Возраст файла не снимает блокировку с работающего приложения.
+        lock.setStaleLockTime(0)
+        if not lock.tryLock(0):
+            raise RuntimeError(
+                "Файл испытания занят другим окном Logger или недоступен для записи. "
+                "Закройте его в другой копии программы и повторите попытку."
+            )
+        return lock
+
+    def close(self):
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None
+        if self.file_lock is not None:
+            self.file_lock.unlock()
+            self.file_lock = None
+        self._file_path = None
 
     def create_database(self):
         """
@@ -67,8 +95,10 @@ class DatabaseAccessor:
         """, ("", "", "", "", ""))
 
         self.connection.commit()
+        self.file_lock = None
+        self._file_path = None
 
-    def open_database(self, file_path: str):
+    def open_database(self, file_path: str, file_lock=None):
         """
         Загружает рабочую копию существующей базы SQLite в память.
         """
@@ -77,6 +107,7 @@ class DatabaseAccessor:
             raise FileNotFoundError(
                 f"Файл базы данных не найден: {file_path}"
             )
+        lock = file_lock if file_lock is not None else self.acquire_file_lock(file_path)
 
         source_uri = source_path.as_uri() + "?mode=ro"
         new_connection = sqlite3.connect(":memory:")
@@ -101,6 +132,8 @@ class DatabaseAccessor:
 
         self.connection = new_connection
         self.comments_dirty = False
+        self.file_lock = lock
+        self._file_path = source_path
 
     @staticmethod
     def _backup(source: sqlite3.Connection, target: sqlite3.Connection):
@@ -233,6 +266,7 @@ class DatabaseAccessor:
             raise ValueError(
                 "В базе отсутствует запись испытания с id = 1"
             )
+        MeasurementJournal._read(connection)
 
     def get_data(self) -> ExpData:
         """
@@ -307,10 +341,13 @@ class DatabaseAccessor:
             self.save_database_as(file_path)
             return
 
+        lock = self.acquire_file_lock(file_path)
         destination_uri = destination.as_uri() + "?mode=rw"
         with closing(sqlite3.connect(destination_uri, uri=True)) as target:
             self._backup(self.connection, target)
         self.comments_dirty = False
+        self.file_lock = lock
+        self._file_path = destination
 
     def is_open(self) -> bool:
         """
@@ -372,7 +409,7 @@ class DatabaseAccessor:
         if result.rowcount:
             self.comments_dirty = True
 
-    def save_database_as(self, file_path: str):
+    def save_database_as(self, file_path: str, file_lock=None):
         """Сохраняет рабочую копию базы по новому пути."""
         if self.connection is None:
             raise RuntimeError("Нет открытой базы данных")
@@ -384,6 +421,7 @@ class DatabaseAccessor:
                 f"Каталог назначения не существует: {destination.parent}"
             )
 
+        lock = file_lock if file_lock is not None else self.acquire_file_lock(file_path)
         temporary_path = None
 
         try:
@@ -407,6 +445,8 @@ class DatabaseAccessor:
             temporary_path = None
 
             self.comments_dirty = False
+            self.file_lock = lock
+            self._file_path = destination
 
         finally:
             if temporary_path is not None:

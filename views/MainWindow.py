@@ -20,6 +20,7 @@ from accessors.measurement_journal import MeasurementJournal
 from services.internal_logger import InternalLogger as Logger
 from services.internal_logger import LogLevel
 from services.excel_exporter import ExcelExporter
+from services.measurement_writer import MeasurementWriter
 from models.exp_data import ExpData
 from views.CommentDialog import CommentDialog
 from views.DeleteCommentDialog import DeleteCommentDialog
@@ -46,6 +47,8 @@ class MainWindow(QMainWindow):
         self._saved_exp_data = None
         self._saved_comments = []
         self._closing = False
+        self._measurement_writer = None
+        self._journal_notice = None
 
         self._device_search_thread = None
         self._device_search_worker = None
@@ -138,16 +141,17 @@ class MainWindow(QMainWindow):
         self.DeleteCommentButton.setEnabled(editable)
 
     def _confirm_leave_experiment(self) -> bool:
+        if self._device1_window is not None and self._device1_window.is_recording:
+            self._device1_window.show_recording_notice()
+            return False
         if not self.database_accessor.is_open():
             return True
         comments_changed = (
             self.database_accessor.comments_dirty
             and self.database_accessor.get_comments() != self._saved_comments
         )
-        recording = self._device1_window is not None and self._device1_window.is_recording
         if (
-            not recording
-            and not self.measurement_journal().exists()
+            not self.measurement_journal().exists()
             and not comments_changed
             and self.get_exp_data_from_ui() == self._saved_exp_data
         ):
@@ -168,16 +172,54 @@ class MainWindow(QMainWindow):
         dialog.exec()
         choice = dialog.clickedButton()
         if choice is save:
-            if self._device1_window is not None:
-                self._device1_window.stop_recording()
             return self.save_exp()
         return choice is discard
 
-    def measurement_journal(self) -> MeasurementJournal:
-        return MeasurementJournal(self.current_file_path)
+    def measurement_journal(self) -> MeasurementWriter:
+        if self._measurement_writer is None:
+            self._measurement_writer = MeasurementWriter(self.current_file_path, self)
+            self._measurement_writer.write_delayed.connect(self._on_journal_delayed)
+            self._measurement_writer.write_resumed.connect(self._on_journal_resumed)
+        return self._measurement_writer
+
+    def _on_journal_delayed(self, path, message):
+        writer = self._measurement_writer
+        if self.sender() is not writer or writer.path != path or not writer.has_unwritten():
+            return
+        text = (
+            "Запись во временный журнал задерживается. Опрос продолжается, "
+            "данные ожидают сохранения в памяти. "
+            "Сохраните испытание после устранения причины.\n\n" + message
+        )
+        Logger.log(text, LogLevel.WARNING)
+        self.statusBar().showMessage("Задержка сохранения измерений")
+        if self._journal_notice is None:
+            self._journal_notice = QMessageBox(self)
+            self._journal_notice.setWindowTitle("Задержка сохранения измерений")
+            self._journal_notice.setIcon(QMessageBox.Icon.Warning)
+            self._journal_notice.setModal(False)
+            self._journal_notice.addButton("Понятно", QMessageBox.ButtonRole.AcceptRole)
+        self._journal_notice.setText(text)
+        self._journal_notice.show()
+
+    def _on_journal_resumed(self, path):
+        if self.sender() is not self._measurement_writer or self._measurement_writer.path != path:
+            return
+        Logger.log("Запись во временный журнал возобновлена.")
+        self.statusBar().showMessage("Запись во временный журнал возобновлена", 10000)
+        if self._journal_notice is not None:
+            self._journal_notice.close()
 
     def measurement_rows(self):
         return self.measurement_journal().rows(self.database_accessor.connection)
+
+    def measurement_start_time(self) -> float | None:
+        """Общая точка отсчёта по первой записи в истории испытания."""
+        return min(
+            (datetime.fromisoformat(row.timestamp).timestamp()
+             for row in self.measurement_rows()),
+            default=None,
+        )
 
     def ensure_measurement_file(self) -> bool:
         return self.current_file_path is not None or self.save_exp()
@@ -191,13 +233,21 @@ class MainWindow(QMainWindow):
     def _leave_measurements(self):
         if self._device1_window is not None:
             self._device1_window.close()
-        self._clear_measurement_journal(self.measurement_journal())
+        journal = self.measurement_journal()
+        journal.stop()
+        self._clear_measurement_journal(journal)
+        journal.deleteLater()
+        self._measurement_writer = None
+        if self._journal_notice is not None:
+            self._journal_notice.close()
 
     def create_exp(self):
         """Создаёт новое испытание в оперативной памяти."""
         if not self._confirm_leave_experiment():
             return
 
+        # Старый файл остаётся заблокирован до очистки его журнала.
+        previous_lock = self.database_accessor.file_lock
         try:
             self.database_accessor.create_database()
         except Exception as error:
@@ -208,6 +258,7 @@ class MainWindow(QMainWindow):
             return
 
         self._leave_measurements()
+        del previous_lock
         self.current_file_path = None
         self.CurrentExp.setText("Новый файл")
 
@@ -232,6 +283,12 @@ class MainWindow(QMainWindow):
             Logger.log("Открытие файла отменено")
             return
 
+        try:
+            file_lock = self.database_accessor.acquire_file_lock(file_path)
+        except Exception as error:
+            Logger.log(str(error), LogLevel.ERROR)
+            QMessageBox.warning(self, "Файл испытания недоступен", str(error))
+            return
         recovery = MeasurementJournal(file_path)
         restore = None
         if not self._same_file(file_path) and recovery.exists():
@@ -242,21 +299,24 @@ class MainWindow(QMainWindow):
         if not self._confirm_leave_experiment():
             return
 
+        previous_lock = self.database_accessor.file_lock
         try:
             if restore:
                 recovery.pending_rows()
-            self.database_accessor.open_database(file_path)
+            if restore is False:
+                recovery.clear()
+            self.database_accessor.open_database(file_path, file_lock=file_lock)
 
             exp_data = self.database_accessor.get_data()
             comments = self.database_accessor.get_comments()
 
             self._leave_measurements()
-            if restore is False:
-                self._clear_measurement_journal(recovery)
+            del previous_lock
             self.set_exp_data_to_ui(exp_data)
             self.set_comments_to_ui(comments)
 
             self.current_file_path = file_path
+            self.measurement_journal()
             self._saved_exp_data = self.get_exp_data_from_ui()
             self._saved_comments = comments
             self.CurrentExp.setText(file_path)
@@ -272,6 +332,7 @@ class MainWindow(QMainWindow):
                 f"Ошибка при открытии файла: {error}",
                 LogLevel.ERROR,
             )
+            QMessageBox.warning(self, "Ошибка открытия испытания", str(error))
 
     def save_exp(self) -> bool:
         """Сохраняет испытание в текущий файл."""
@@ -329,23 +390,35 @@ class MainWindow(QMainWindow):
             )
 
     def _save_sqlite(self, file_path: str, exp_data: ExpData):
+        previous_lock = self.database_accessor.file_lock
+        file_lock = self.database_accessor.acquire_file_lock(file_path)
         same_file = self._same_file(file_path)
         if not same_file and MeasurementJournal(file_path).exists():
             raise ValueError("У файла назначения есть временный журнал. Откройте файл или выберите другой путь.")
         journal = self.measurement_journal()
         self.database_accessor.set_data(exp_data)
-        with self.database_accessor.stage_measurements(journal):
-            if same_file:
-                self.database_accessor.save_database(file_path)
-            else:
-                self.database_accessor.save_database_as(file_path)
-        self._clear_measurement_journal(journal)
+        with journal.suspend_writes():
+            with self.database_accessor.stage_measurements(journal):
+                if same_file:
+                    self.database_accessor.save_database(file_path)
+                else:
+                    self.database_accessor.save_database_as(file_path, file_lock=file_lock)
+            cleanup_error = journal.mark_saved(file_path)
+        del previous_lock
 
         self.current_file_path = file_path
         self._saved_exp_data = exp_data
         self._saved_comments = self.database_accessor.get_comments()
         self.CurrentExp.setText(file_path)
         Logger.log(f"Испытание сохранено: {file_path}")
+        self.statusBar().showMessage("Испытание сохранено", 5000)
+        if self._journal_notice is not None:
+            self._journal_notice.close()
+        if cleanup_error is not None:
+            Logger.log(
+                f"Файл сохранён, но прежний временный журнал не удалён: {cleanup_error}",
+                LogLevel.WARNING,
+            )
 
     def save_as_exp(self):
         """Сохраняет испытание в выбранном формате и месте."""
@@ -771,4 +844,5 @@ class MainWindow(QMainWindow):
             return
 
         self._leave_measurements()
+        self.database_accessor.close()
         super().closeEvent(event)
